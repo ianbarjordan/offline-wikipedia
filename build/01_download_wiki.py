@@ -1,16 +1,22 @@
 """
 01_download_wiki.py
 
-Download the Simple English Wikipedia CirrusSearch JSON dump from
-https://dumps.wikimedia.org/other/cirrussearch/current/
+Download the Simple English Wikipedia CirrusSearch dump from:
 
-The target file matches: simplewiki-YYYYMMDD-cirrussearch-content.json.gz
+  https://dumps.wikimedia.org/other/cirrus_search_index/{YYYYMMDD}/
+      index_name=simplewiki_content/
+          simplewiki_content-{YYYYMMDD}-00000.json.bz2
+
+The script discovers the most recent dated directory automatically by
+scraping https://dumps.wikimedia.org/other/cirrus_search_index/
+
 Saved to the raw/ scratch directory (gitignored).
 
 Usage:
     python build/01_download_wiki.py
     python build/01_download_wiki.py --out-dir path/to/raw
-    python build/01_download_wiki.py --filename simplewiki-20250101-cirrussearch-content.json.gz
+    python build/01_download_wiki.py --date 20250101
+    python build/01_download_wiki.py --dry-run
 """
 
 import argparse
@@ -21,8 +27,9 @@ from pathlib import Path
 import requests
 from tqdm import tqdm
 
-DUMP_BASE_URL = "https://dumps.wikimedia.org/other/cirrussearch/current/"
-FILENAME_RE = re.compile(r"simplewiki-\d{8}-cirrussearch-content\.json\.gz")
+CIRRUS_INDEX_BASE = "https://dumps.wikimedia.org/other/cirrus_search_index/"
+# Dated directories appear in the listing as href="20250101/"
+DATE_RE = re.compile(r'href="(\d{8})/"')
 
 # Path relative to the wiki-offline/ project root
 DEFAULT_RAW_DIR = Path(__file__).parent.parent / "raw"
@@ -35,26 +42,39 @@ CHUNK_SIZE = 256 * 1024  # 256 KB per read chunk
 # ---------------------------------------------------------------------------
 
 
-def find_dump_filename() -> str:
-    """Fetch the cirrussearch listing page and return the simplewiki filename."""
-    print(f"Querying dump listing: {DUMP_BASE_URL}")
+def find_latest_date() -> str:
+    """Scrape the cirrus_search_index listing and return the newest YYYYMMDD."""
+    print(f"Querying dump index: {CIRRUS_INDEX_BASE}")
     try:
-        resp = requests.get(DUMP_BASE_URL, timeout=30)
+        resp = requests.get(CIRRUS_INDEX_BASE, timeout=30)
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise RuntimeError(f"Could not reach dump server: {exc}") from exc
 
-    matches = FILENAME_RE.findall(resp.text)
-    if not matches:
+    dates = DATE_RE.findall(resp.text)
+    if not dates:
         raise RuntimeError(
-            f"No 'simplewiki-*-cirrussearch-content.json.gz' entry found at "
-            f"{DUMP_BASE_URL}. Check the URL manually — the dump may have moved."
+            f"No dated directories found at {CIRRUS_INDEX_BASE}. "
+            "Check the URL manually — the dump layout may have changed."
         )
 
-    # Sort and pick the newest date if multiple exist
-    filename = sorted(matches)[-1]
-    print(f"Found dump file: {filename}")
-    return filename
+    latest = sorted(dates)[-1]
+    print(f"Latest dump date: {latest}")
+    return latest
+
+
+def build_url(date: str) -> str:
+    """Construct the full download URL for the given YYYYMMDD date string."""
+    return (
+        f"{CIRRUS_INDEX_BASE}{date}/"
+        f"index_name=simplewiki_content/"
+        f"simplewiki_content-{date}-00000.json.bz2"
+    )
+
+
+def local_filename(date: str) -> str:
+    """Return the local filename to save the dump as."""
+    return f"simplewiki_content-{date}-00000.json.bz2"
 
 
 def download(url: str, dest: Path) -> None:
@@ -98,23 +118,38 @@ def main() -> None:
         "--out-dir",
         type=Path,
         default=DEFAULT_RAW_DIR,
-        help="Directory to save the downloaded .json.gz file.",
+        help="Directory to save the downloaded .json.bz2 file.",
     )
     parser.add_argument(
-        "--filename",
+        "--date",
         type=str,
         default=None,
+        metavar="YYYYMMDD",
         help=(
-            "Exact dump filename to download. "
-            "Auto-detected from the listing page if not specified."
+            "Dump date to download. "
+            "Auto-detected from the index listing if not specified."
         ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Discover and print the download URL without downloading anything.",
     )
     args = parser.parse_args()
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    date = args.date or find_latest_date()
+    url = build_url(date)
+    fname = local_filename(date)
+    dest = args.out_dir / fname
 
-    filename = args.filename or find_dump_filename()
-    dest = args.out_dir / filename
+    print(f"URL      : {url}")
+    print(f"Local    : {dest}")
+
+    if args.dry_run:
+        print("\n--dry-run: no download performed.")
+        return
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
     if dest.exists():
         size_gb = dest.stat().st_size / 1_073_741_824
@@ -122,7 +157,6 @@ def main() -> None:
         print("Delete it and re-run to force a fresh download.")
         return
 
-    url = DUMP_BASE_URL + filename
     download(url, dest)
 
     size_gb = dest.stat().st_size / 1_073_741_824

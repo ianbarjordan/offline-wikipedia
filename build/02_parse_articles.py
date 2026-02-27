@@ -6,7 +6,7 @@ staging JSONL file for the downstream SQLite and embedding scripts.
 
 CirrusSearch dump format
 ------------------------
-The .json.gz file contains pairs of newline-delimited JSON lines:
+The .json.bz2 file contains pairs of newline-delimited JSON lines:
 
   {"index":{"_id":"12345","_type":"page"}}   <- action line (skip)
   { ... full article JSON ... }              <- document line (process)
@@ -29,12 +29,12 @@ Output
 
 Usage:
     python build/02_parse_articles.py
-    python build/02_parse_articles.py --dump raw/simplewiki-20250101-cirrussearch-content.json.gz
+    python build/02_parse_articles.py --dump raw/simplewiki_content-20250101-00000.json.bz2
     python build/02_parse_articles.py --out raw/articles_parsed.jsonl
 """
 
 import argparse
-import gzip
+import bz2
 import json
 import re
 import sys
@@ -101,7 +101,7 @@ def extract_lead(doc: dict) -> str:
 def find_dump(raw_dir: Path) -> Path:
     """Return the newest simplewiki CirrusSearch dump in *raw_dir*."""
     candidates = sorted(
-        raw_dir.glob("simplewiki-*-cirrussearch-content.json.gz")
+        raw_dir.glob("simplewiki_content-*-00000.json.bz2")
     )
     if not candidates:
         raise FileNotFoundError(
@@ -134,13 +134,13 @@ def parse_dump(dump_path: Path, out_path: Path) -> dict:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with (
-        gzip.open(dump_path, "rt", encoding="utf-8", errors="replace") as gz,
+        bz2.open(dump_path, "rt", encoding="utf-8", errors="replace") as bz,
         open(out_path, "w", encoding="utf-8") as out_fh,
         tqdm(desc="Parsing articles", unit="doc", dynamic_ncols=True) as bar,
     ):
         pending_doc = False  # True when the next line should be a document
 
-        for raw_line in gz:
+        for raw_line in bz:
             line = raw_line.strip()
             if not line:
                 continue
@@ -215,7 +215,7 @@ def main() -> None:
         "--dump",
         type=Path,
         default=None,
-        help="Path to the .json.gz dump (auto-detected in raw/ if omitted).",
+        help="Path to the .json.bz2 dump (auto-detected in raw/ if omitted).",
     )
     parser.add_argument(
         "--out",
