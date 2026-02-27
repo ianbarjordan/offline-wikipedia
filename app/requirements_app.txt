@@ -1,0 +1,39 @@
+# requirements_app.txt
+# Runtime dependencies for the wiki-offline end-user app.
+# Install with: pip install -r app/requirements_app.txt
+#
+# NOTE — torch (CPU only):
+#   sentence-transformers pulls in torch as a dependency.  The default
+#   PyPI wheel is the GPU build (~2.5 GB).  For a CPU-only install use:
+#
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+#     pip install -r app/requirements_app.txt
+#
+# NOTE — embedding model:
+#   all-MiniLM-L6-v2 is downloaded from HuggingFace on first launch and
+#   cached in ~/.cache/huggingface/.  For a fully offline installer build
+#   the developer must pre-download it before running PyInstaller:
+#
+#     python -c "from sentence_transformers import SentenceTransformer; \
+#                SentenceTransformer('all-MiniLM-L6-v2')"
+#
+# NOTE — LLM model (phi-3-mini-q4_k_m.gguf):
+#   Not a pip package.  Download manually from HuggingFace and place it in
+#   models/phi-3-mini-q4_k_m.gguf before running the app or building.
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
+gradio==6.7.0
+
+# ---------------------------------------------------------------------------
+# LLM inference
+# ---------------------------------------------------------------------------
+llama-cpp-python==0.3.16
+
+# ---------------------------------------------------------------------------
+# Retrieval
+# ---------------------------------------------------------------------------
+faiss-cpu==1.13.2
+sentence-transformers==5.2.3
+numpy==2.4.2

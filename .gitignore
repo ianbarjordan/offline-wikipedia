@@ -1,0 +1,28 @@
+## Scratch / generated artefacts — never commit these
+raw/
+data/wikipedia.db
+data/wikipedia.faiss
+data/id_map.json
+data/articles/*.html
+
+## Models are too large for git
+models/*.gguf
+
+## Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build_pyinstaller/
+
+## PyInstaller output
+WikiOffline/
+*.spec.bak
+
+## OS noise
+.DS_Store
+Thumbs.db
+desktop.ini

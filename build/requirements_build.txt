@@ -1,0 +1,31 @@
+# =============================================================================
+# Build-phase dependencies
+# Run on the DEVELOPER machine (Windows, CUDA GPU recommended for step 04).
+#
+# STEP 1 — Install PyTorch with CUDA support FIRST (not listed here because
+#           the index URL differs from PyPI):
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+#   Replace cu121 with your CUDA version (cu118, cu124, etc.).
+#   Check: https://pytorch.org/get-started/locally/
+#
+# STEP 2 — Install the rest:
+#
+#   pip install -r requirements_build.txt
+# =============================================================================
+
+# HTTP download with streaming
+requests>=2.31,<3
+
+# Progress bars
+tqdm>=4.66,<5
+
+# Sentence embeddings (all-MiniLM-L6-v2)
+sentence-transformers>=3.0,<4
+
+# Vector index construction (CPU is fine here; GPU is used only for embedding)
+faiss-cpu>=1.8,<2
+
+# Numerical arrays (keep <2 for widest faiss-cpu compatibility)
+numpy>=1.26,<2
