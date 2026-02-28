@@ -34,6 +34,43 @@ from sentence_transformers import SentenceTransformer
 
 import config
 
+# ---------------------------------------------------------------------------
+# Title-boost rerank helper
+# ---------------------------------------------------------------------------
+
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "of", "in", "to", "and", "or",
+    "what", "how", "why", "who", "when", "where", "was", "were",
+})
+
+
+def _title_rerank(query: str, articles: list[dict]) -> list[dict]:
+    """
+    Boost articles whose title words overlap with the query.
+
+    A perfect title match is worth config.TITLE_BOOST rank positions.
+    FAISS rank order is preserved for articles with no title overlap.
+    Common stopwords and short tokens are excluded from the query word set
+    so that articles with semantically empty query terms aren't over-promoted.
+    """
+    if not articles:
+        return articles
+    q_words = {
+        w for w in query.lower().split()
+        if w not in _STOPWORDS and len(w) > 2
+    }
+    if not q_words:
+        return articles
+
+    def sort_key(item: tuple[int, dict]) -> float:
+        rank, art = item
+        t_words = set(art["title"].lower().split())
+        overlap = len(q_words & t_words) / len(q_words)
+        return rank - config.TITLE_BOOST * overlap  # lower value = better rank
+
+    reranked = sorted(enumerate(articles), key=sort_key)
+    return [art for _, art in reranked]
+
 
 class Retriever:
     """
@@ -134,17 +171,24 @@ class Retriever:
         faiss.normalize_L2(vec)
 
         # 3. ANN search — returns (distances, indices) each shape (1, top_k)
-        _distances, faiss_indices = self.index.search(vec, top_k)
+        #    For L2-normalized vectors the index returns squared L2 distances;
+        #    convert to cosine similarity via: cos_sim = 1 - (L2² / 2).
+        distances, faiss_indices = self.index.search(vec, top_k)
         raw_indices: list[int] = faiss_indices[0].tolist()
+        raw_distances: list[float] = distances[0].tolist()
 
-        # 4. Map FAISS positions → SQLite article IDs, drop -1 sentinels
-        sqlite_ids: list[int] = [
-            self._id_map[fi]
-            for fi in raw_indices
+        # 4. Map FAISS positions → SQLite article IDs, drop -1 sentinels.
+        #    Keep cosine similarity score paired with each valid id.
+        valid_pairs: list[tuple[int, float]] = [
+            (self._id_map[fi], max(0.0, 1.0 - d / 2.0))
+            for fi, d in zip(raw_indices, raw_distances)
             if fi != -1 and fi in self._id_map
         ]
-        if not sqlite_ids:
+        if not valid_pairs:
             return []
+
+        sqlite_ids: list[int] = [sid for sid, _ in valid_pairs]
+        score_map: dict[int, float] = {sid: score for sid, score in valid_pairs}
 
         # 5. Fetch article records from SQLite (preserve FAISS rank order)
         placeholders = ",".join("?" * len(sqlite_ids))
@@ -157,15 +201,16 @@ class Retriever:
         rank: dict[int, int] = {sid: pos for pos, sid in enumerate(sqlite_ids)}
         rows_sorted = sorted(rows, key=lambda r: rank.get(r["id"], 999))
 
-        return [
+        return _title_rerank(query, [
             {
                 "id": r["id"],
                 "title": r["title"],
                 "lead": r["lead"],
                 "url_slug": r["url_slug"],
+                "score": score_map.get(r["id"], 0.0),
             }
             for r in rows_sorted
-        ]
+        ])
 
     # ------------------------------------------------------------------
     # Resource management

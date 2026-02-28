@@ -116,6 +116,13 @@ wiki-offline/
 
 File size is approximately 2.2 GB.
 
+> **Note for full Wikipedia build:** This model was selected for POC validation.
+> Before the final build targeting 8 GB RAM laptops, revisit the model choice —
+> consider **Gemma 2 2B q4\_k\_m** (~1.7 GB) or **Phi-3 Mini q4\_0** (~2 GB) for
+> better performance on memory-constrained hardware. The RAG pipeline grounds
+> answers in retrieved context, so a smaller model involves minimal quality
+> tradeoff.
+
 ---
 
 ## Part 3 — Run the Application (Development Mode)

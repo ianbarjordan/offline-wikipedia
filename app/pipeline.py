@@ -55,13 +55,25 @@ from retriever import Retriever
 # ---------------------------------------------------------------------------
 
 _SYSTEM_TEMPLATE = """\
-You are a helpful assistant that answers questions using Simple English \
-Wikipedia articles provided below. Base your answer on the provided context. \
-If the context does not contain enough information to answer the question, \
-say so clearly rather than guessing. Keep answers concise and accurate.
+You are a helpful assistant that answers questions exclusively from the Wikipedia \
+context provided below. Do NOT use your training knowledge or add information \
+not present in the context. If the context does not clearly answer the question, \
+reply with: "I couldn't find reliable information on that in the provided Wikipedia \
+articles." Be concise, accurate, and cite sources using [N] notation where helpful.
 
 Wikipedia context:
 {context}"""
+
+_LOW_CONFIDENCE_REPLY = (
+    "I couldn't find reliable information on that in Wikipedia. "
+    "The search didn't return closely related articles — try rephrasing "
+    "or asking about a more specific topic."
+)
+
+
+def _const_generator(text: str) -> Generator[str, None, None]:
+    """Yield a single string as a one-shot generator (mirrors the streaming API)."""
+    yield text
 
 
 class Pipeline:
@@ -101,6 +113,14 @@ class Pipeline:
                    found nothing.
         """
         articles = self._retriever.search(user_message)
+
+        # Confidence gate: if the top result's cosine similarity is below the
+        # threshold the retrieved context is too weak to ground a useful answer.
+        # Return a canned reply immediately rather than passing noise to the LLM.
+        best_score = articles[0]["score"] if articles else 0.0
+        if best_score < config.CONFIDENCE_THRESHOLD:
+            return _const_generator(_LOW_CONFIDENCE_REPLY), articles
+
         context = _build_context(articles)
         prompt = _build_prompt(user_message, chat_history, context)
         stream = self._llm.generate(prompt, stream=True)
@@ -179,12 +199,14 @@ if __name__ == "__main__":
             "title": "Paris",
             "lead": "Paris is the capital and largest city of France.",
             "url_slug": "Paris",
+            "score": 0.85,
         },
         {
             "id": 2,
             "title": "France",
             "lead": "France is a country in Western Europe.",
             "url_slug": "France",
+            "score": 0.72,
         },
     ]
     mock_history = [

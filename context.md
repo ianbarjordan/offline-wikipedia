@@ -96,20 +96,25 @@ User question
     ▼
 retriever.search(query, top_k=5)
     ├─ embed query with all-MiniLM-L6-v2 (CPU)
-    ├─ index.search() → top-k FAISS positions
+    ├─ index.search() → top-k FAISS positions + squared-L2 distances
+    ├─ convert distances → cosine similarity scores (1 - d/2)
     ├─ id_map[pos] → SQLite ids
-    └─ SELECT title, lead, url_slug FROM articles WHERE id IN (...)
+    ├─ SELECT title, lead, url_slug FROM articles WHERE id IN (...)
+    ├─ attach score to each article dict
+    └─ _title_rerank(): boost articles whose title words match query
     │
     ▼
 pipeline.query(user_message, chat_history)
+    ├─ confidence gate: if articles[0]["score"] < CONFIDENCE_THRESHOLD
+    │    └─ return canned "not found" generator (skip LLM entirely)
     ├─ retriever results → context block
     ├─ last 3 chat_history exchanges → conversational context
-    ├─ build prompt with system instructions
+    ├─ build prompt with strict grounding system instructions
     └─ llm.generate(prompt, stream=True)
     │
     ▼
 gui.py streaming callback → Gradio Chatbot
-    └─ source buttons → os.startfile(data/articles/{id}.html)
+    └─ source buttons → webbrowser.open(simple.wikipedia.org/wiki/{slug})
 ```
 
 ---
@@ -131,9 +136,10 @@ gui.py streaming callback → Gradio Chatbot
 ## Configuration
 
 All tuneable constants live in `app/config.py`:
-- `TOP_K`, `N_THREADS`, `N_CTX`, `N_GPU_LAYERS`
-- `MODEL_PATH`, `DB_PATH`, `FAISS_PATH`, `ID_MAP_PATH`
-- `EMBEDDING_MODEL`, `CHAT_HISTORY_TURNS`
+- `TOP_K`, `NPROBE`, `CONFIDENCE_THRESHOLD`, `TITLE_BOOST` — retrieval
+- `N_THREADS`, `N_GPU_LAYERS`, `CTX_WINDOW` — LLM performance
+- `EMBED_MODEL`, `EMBEDDING_DIM`, `CHAT_HISTORY_TURNS`
+- `MODEL_PATH`, `DB_PATH`, `FAISS_PATH`, `ID_MAP_PATH`, `ARTICLES_DIR`
 
 ---
 
@@ -290,9 +296,40 @@ This works correctly when running from source. **When frozen by PyInstaller**,
 
 ---
 
+## POC Fix Session — Changes Applied
+
+**Issue 2 — Streaming artifact fix (`app/llm.py`)**
+`_stream_tokens` now uses defensive `.get()` access:
+`choices = chunk.get("choices") if isinstance(chunk, dict) else None`
+instead of hard `chunk["choices"][0]["text"]` indexing.
+
+**Issue 3 — Grounding + confidence gate (`app/pipeline.py`, `app/config.py`)**
+- System prompt rewritten to say "exclusively from the Wikipedia context below.
+  Do NOT use your training knowledge."
+- Confidence gate added: if `articles[0]["score"] < CONFIDENCE_THRESHOLD (0.35)`,
+  returns a canned `_LOW_CONFIDENCE_REPLY` via `_const_generator` without calling the LLM.
+- `CONFIDENCE_THRESHOLD = 0.35`, `TITLE_BOOST = 2.0` added to `config.py`.
+
+**Issue 4 — Source relevance (`app/retriever.py`)**
+- FAISS distances now captured and converted to cosine similarities (1 - d/2).
+- Each article dict now includes `"score": float` (cosine similarity).
+- `_title_rerank()` added: post-retrieval rerank that boosts articles whose
+  title words overlap with the query by up to `TITLE_BOOST` rank positions.
+- Stopwords and short tokens excluded from query word set.
+
+**Source link fix (`app/gui.py`)**
+- Source buttons now open `https://simple.wikipedia.org/wiki/{url_slug}` in the
+  default browser via `webbrowser.open()` instead of the local lead-only HTML file.
+- `urllib.parse.quote(slug, safe=":")` applied for URL safety.
+
 ## Next Action When Resuming
 
-All app files are complete and end-to-end smoke tested (44/44 checks). To build the Windows installer:
+All app files updated. Model swap (Issue 1) still pending for full-Wikipedia build:
+- Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
+- Update `config.MODEL_PATH` to match new filename
+- Tune `CONFIDENCE_THRESHOLD` based on observed score distributions
+
+To build the Windows installer:
   1. Complete the 4-step pre-build checklist in `wiki-offline.spec`
   2. `pip install pyinstaller && pyinstaller wiki-offline.spec`
-  3. Ship `dist/wiki-offline/` to end users.
+  3. Ship `dist/WikiOffline/` to end users.

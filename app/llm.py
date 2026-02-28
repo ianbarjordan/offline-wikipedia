@@ -111,7 +111,8 @@ class LLM:
     def _stream_tokens(self, prompt: str, **kwargs) -> Generator[str, None, None]:
         """Yield individual token strings from a streaming llama.cpp response."""
         for chunk in self._llm(prompt, **kwargs):
-            token: str = chunk["choices"][0]["text"]
+            choices = chunk.get("choices") if isinstance(chunk, dict) else None
+            token = choices[0].get("text", "") if choices else ""
             if token:
                 yield token
 

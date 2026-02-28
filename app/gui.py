@@ -62,6 +62,8 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
+import urllib.parse
+import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING, Generator
 
@@ -144,11 +146,11 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
         yield ("", history, articles, show_row, *src_updates)
 
     def open_article(articles: list, btn_idx: int) -> None:
-        """Open the HTML article for source button *btn_idx*."""
+        """Open the Simple Wikipedia article for source button *btn_idx*."""
         if btn_idx < len(articles):
             art = articles[btn_idx]
-            html_path = config.ARTICLES_DIR / f"{art['id']}.html"
-            _open_file(html_path)
+            slug = urllib.parse.quote(art["url_slug"], safe=":")
+            webbrowser.open(f"https://simple.wikipedia.org/wiki/{slug}")
 
     def clear_conversation() -> tuple:
         """Reset chat and hide sources."""

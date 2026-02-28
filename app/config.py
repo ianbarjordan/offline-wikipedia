@@ -23,6 +23,12 @@ PROJECT_ROOT: Path = Path(__file__).parent.parent.resolve()
 TOP_K: int = 5    # Articles returned per query
 NPROBE: int = 32  # FAISS IVF cells searched per query (higher → better recall,
                   # slightly slower).  Has no effect on flat indexes.
+CONFIDENCE_THRESHOLD: float = 0.35  # Min cosine similarity for the top result to
+                                     # pass the LLM confidence gate.  Queries whose
+                                     # best match falls below this score return a
+                                     # canned "not found" response without LLM call.
+TITLE_BOOST: float = 2.0             # Rank positions a perfect query-title word
+                                     # overlap is worth during post-retrieval rerank.
 
 # ---------------------------------------------------------------------------
 # Embedding model  (must match the model used in build/04_embed_and_index.py)
