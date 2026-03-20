@@ -76,6 +76,11 @@ def _const_generator(text: str) -> Generator[str, None, None]:
     yield text
 
 
+def _prepend_generator(prefix: str, gen) -> Generator[str, None, None]:
+    yield prefix
+    yield from gen
+
+
 class Pipeline:
     """
     Orchestrates retrieval → prompt construction → LLM generation.
@@ -114,22 +119,39 @@ class Pipeline:
         """
         articles = self._retriever.search(user_message)
 
-        # Confidence gate: if the top result's cosine similarity is below the
-        # threshold the retrieved context is too weak to ground a useful answer.
-        # Return a canned reply immediately rather than passing noise to the LLM.
-        best_score = articles[0]["score"] if articles else 0.0
-        if best_score < config.CONFIDENCE_THRESHOLD:
-            return _const_generator(_LOW_CONFIDENCE_REPLY), articles
+        low_confidence = (not articles) or (articles[0]["score"] < config.CONFIDENCE_THRESHOLD)
+
+        if low_confidence and not articles:
+            return _const_generator(_LOW_CONFIDENCE_REPLY), []
 
         context = _build_context(articles)
-        prompt = _build_prompt(user_message, chat_history, context)
+        prompt = _build_prompt(user_message, chat_history, context, low_confidence=low_confidence)
         stream = self._llm.generate(prompt, stream=True)
+
+        if low_confidence:
+            return _prepend_generator(
+                "I didn't find a strong Wikipedia match for your question, so this answer may be incomplete.\n\n",
+                stream,
+            ), articles
+
         return stream, articles
 
 
 # ---------------------------------------------------------------------------
 # Module-level prompt helpers (pure functions — easy to unit-test)
 # ---------------------------------------------------------------------------
+
+_GROUNDING_HIGH = (
+    "Answer exclusively from the Wikipedia context below.\n"
+    "Do NOT use your training knowledge.\n"
+    "If the context does not contain the answer, say you don't know."
+)
+
+_GROUNDING_LOW = (
+    "Answer using the Wikipedia context below as your primary source.\n"
+    "If the context is insufficient, say so briefly before answering."
+)
+
 
 def _build_context(articles: list[dict]) -> str:
     """
@@ -152,6 +174,7 @@ def _build_prompt(
     user_message: str,
     chat_history: list[tuple[str, str]],
     context: str,
+    low_confidence: bool = False,
 ) -> str:
     """
     Assemble the full Phi-3 chat prompt string.
@@ -162,7 +185,8 @@ def _build_prompt(
     - Current user message
     - Opening <|assistant|> token to prime generation
     """
-    system_text = _SYSTEM_TEMPLATE.format(context=context)
+    grounding = _GROUNDING_LOW if low_confidence else _GROUNDING_HIGH
+    system_text = f"{grounding}\n\nWikipedia context:\n{context}"
 
     parts: list[str] = [f"<|system|>\n{system_text}<|end|>\n"]
 
