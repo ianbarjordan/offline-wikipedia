@@ -306,13 +306,14 @@ instead of hard `chunk["choices"][0]["text"]` indexing.
 **Issue 3 — Grounding + confidence gate (`app/pipeline.py`, `app/config.py`)**
 - System prompt rewritten to say "exclusively from the Wikipedia context below.
   Do NOT use your training knowledge."
-- Confidence gate added: if `articles[0]["score"] < CONFIDENCE_THRESHOLD (0.35)`,
+- Confidence gate added: if `articles[0]["score"] < CONFIDENCE_THRESHOLD`,
   returns a canned `_LOW_CONFIDENCE_REPLY` via `_const_generator` without calling the LLM.
-- `CONFIDENCE_THRESHOLD = 0.35`, `TITLE_BOOST = 2.0` added to `config.py`.
+- `CONFIDENCE_THRESHOLD = 0.15`, `TITLE_BOOST = 2.0` added to `config.py`.
 
 **Issue 4 — Source relevance (`app/retriever.py`)**
-- FAISS distances now captured and converted to cosine similarities (1 - d/2).
-- Each article dict now includes `"score": float` (cosine similarity).
+- FAISS distances captured; index uses `METRIC_INNER_PRODUCT` so distances ARE
+  cosine similarities directly — stored as `score = max(0.0, d)` (no conversion needed).
+- Each article dict now includes `"score": float` (cosine similarity, 0–1).
 - `_title_rerank()` added: post-retrieval rerank that boosts articles whose
   title words overlap with the query by up to `TITLE_BOOST` rank positions.
 - Stopwords and short tokens excluded from query word set.
@@ -322,12 +323,19 @@ instead of hard `chunk["choices"][0]["text"]` indexing.
   default browser via `webbrowser.open()` instead of the local lead-only HTML file.
 - `urllib.parse.quote(slug, safe=":")` applied for URL safety.
 
+**Confidence gate bugfix (`app/retriever.py`, `app/config.py`) — commit 96591db**
+- Score formula was wrong: `1.0 - d/2.0` is the squared-L2 conversion; the index
+  uses `METRIC_INNER_PRODUCT` so the correct formula is just `max(0.0, d)`.
+- The wrong formula inflated bad-match scores toward 1.0, making the gate never fire.
+- `CONFIDENCE_THRESHOLD` lowered from `0.35` → `0.15` to account for IVF-PQ
+  quantization error shrinking inner products below exact cosine similarity.
+
 ## Next Action When Resuming
 
-All app files updated. Model swap (Issue 1) still pending for full-Wikipedia build:
+POC fixes complete and pushed. Model swap (Issue 1) still pending for full-Wikipedia build:
 - Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
 - Update `config.MODEL_PATH` to match new filename
-- Tune `CONFIDENCE_THRESHOLD` based on observed score distributions
+- Update `wiki-offline.spec` model filename reference
 
 To build the Windows installer:
   1. Complete the 4-step pre-build checklist in `wiki-offline.spec`
