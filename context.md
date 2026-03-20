@@ -96,8 +96,8 @@ User question
     ▼
 retriever.search(query, top_k=5)
     ├─ embed query with all-MiniLM-L6-v2 (CPU)
-    ├─ index.search() → top-k FAISS positions + squared-L2 distances
-    ├─ convert distances → cosine similarity scores (1 - d/2)
+    ├─ index.search() → top-k FAISS positions + inner-product scores
+    ├─ score = max(0.0, d)  [index uses METRIC_INNER_PRODUCT]
     ├─ id_map[pos] → SQLite ids
     ├─ SELECT title, lead, url_slug FROM articles WHERE id IN (...)
     ├─ attach score to each article dict
@@ -105,12 +105,15 @@ retriever.search(query, top_k=5)
     │
     ▼
 pipeline.query(user_message, chat_history)
-    ├─ confidence gate: if articles[0]["score"] < CONFIDENCE_THRESHOLD
-    │    └─ return canned "not found" generator (skip LLM entirely)
-    ├─ retriever results → context block
-    ├─ last 3 chat_history exchanges → conversational context
-    ├─ build prompt with strict grounding system instructions
-    └─ llm.generate(prompt, stream=True)
+    ├─ low_confidence = (not articles) or (articles[0]["score"] < CONFIDENCE_THRESHOLD)
+    ├─ if low_confidence AND no articles → return canned reply, []
+    ├─ if low_confidence AND articles present:
+    │    ├─ build prompt with _GROUNDING_LOW (relaxed: "primary source")
+    │    ├─ llm.generate(prompt, stream=True)
+    │    └─ return _prepend_generator(disclaimer, stream), articles
+    └─ if high confidence:
+         ├─ build prompt with _GROUNDING_HIGH (strict: "exclusively from context")
+         └─ return stream, articles
     │
     ▼
 gui.py streaming callback → Gradio Chatbot
@@ -330,14 +333,84 @@ instead of hard `chunk["choices"][0]["text"]` indexing.
 - `CONFIDENCE_THRESHOLD` lowered from `0.35` → `0.15` to account for IVF-PQ
   quantization error shrinking inner products below exact cosine similarity.
 
-## Next Action When Resuming
+**Tiered confidence gate + grounding-aware prompts (`app/pipeline.py`) — commit 3bf1565**
 
-POC fixes complete and pushed. Model swap (Issue 1) still pending for full-Wikipedia build:
-- Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
-- Update `config.MODEL_PATH` to match new filename
-- Update `wiki-offline.spec` model filename reference
+_What changed:_
+- `_prepend_generator(prefix, gen)` added at module level — yields a prefix string
+  then delegates to an existing generator, enabling disclaimer injection without
+  buffering the LLM stream.
+- `_GROUNDING_HIGH` and `_GROUNDING_LOW` module-level string constants encode the
+  two distinct grounding instructions:
+  - HIGH (default): "Answer exclusively from the Wikipedia context below. Do NOT use
+    your training knowledge. If the context does not contain the answer, say you
+    don't know."
+  - LOW: "Answer using the Wikipedia context below as your primary source. If the
+    context is insufficient, say so briefly before answering."
+- `_build_prompt` gains `low_confidence: bool = False` parameter; selects
+  `_GROUNDING_LOW` or `_GROUNDING_HIGH` accordingly. `_SYSTEM_TEMPLATE` is now
+  unused (kept as a historical artefact but no longer called).
+- `query()` confidence gate replaced with three-way logic:
+  1. No articles at all → `_const_generator(_LOW_CONFIDENCE_REPLY), []`
+  2. Articles present but score < threshold → LLM called with LOW grounding, stream
+     wrapped via `_prepend_generator` with disclaimer prefix, articles returned
+  3. Score ≥ threshold → LLM called with HIGH grounding, stream returned directly
 
-To build the Windows installer:
-  1. Complete the 4-step pre-build checklist in `wiki-offline.spec`
-  2. `pip install pyinstaller && pyinstaller wiki-offline.spec`
-  3. Ship `dist/WikiOffline/` to end users.
+_Why:_ The old binary gate silently discarded low-quality-but-non-empty results.
+The new logic lets the LLM attempt an answer while signalling reduced confidence
+to the user, matching real-world query behaviour where partial context is better
+than no answer.
+
+_Smoke test result:_ `scratch/smoke_test_e2e.py` — **44/44 checks passed** (9.9 s).
+
+---
+
+## Current File State
+
+| File | Status | Notes |
+|------|--------|-------|
+| `app/config.py` | Done | `CONFIDENCE_THRESHOLD = 0.15`, `TITLE_BOOST = 2.0` |
+| `app/retriever.py` | Done | Score = `max(0.0, d)` from METRIC_INNER_PRODUCT; `_title_rerank` |
+| `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
+| `app/pipeline.py` | Done | Three-way confidence gate; `_prepend_generator`; dual grounding |
+| `app/gui.py` | Done | `webbrowser.open` source links to simple.wikipedia.org |
+| `app/main.py` | Done | Startup sequence, pre-flight checks, argparse |
+| `build/01–04` | Done | All build scripts written and smoke-tested |
+| `wiki-offline.spec` | Done | PyInstaller onedir spec |
+
+---
+
+## Known Issues / Limitations
+
+- **`_SYSTEM_TEMPLATE` is now dead code** in `pipeline.py`. It was the original
+  system message constant and is no longer called by `_build_prompt`. Safe to delete
+  in a future cleanup pass; left in place to avoid unnecessary churn.
+- **`llama_cpp` must be present** for `pipeline.py` to import — it is a top-level
+  module import via `llm.py`. This caused the e2e smoke test to crash at Stage 6
+  before `llama-cpp-python` was installed in the dev environment. In production
+  this is expected; for CI/testing environments, `llama-cpp-python` must be installed
+  even when a real model is absent (smoke test uses MockLLM to avoid loading the GGUF).
+- **`embeddings.position_ids UNEXPECTED`** warning from sentence-transformers at
+  Retriever load time. Benign — reported by the new LOAD REPORT feature in
+  sentence-transformers 5.x; the key is simply not present in `all-MiniLM-L6-v2`'s
+  saved weights, which is expected for this architecture.
+- **Model swap still pending** for full-Wikipedia build: `phi-3-mini-q4_k_m.gguf`
+  should be replaced with `gemma-2-2b-q4_k_m.gguf` for better instruction-following.
+
+---
+
+## Next Steps When Resuming
+
+1. **Model swap** (pending from prior session):
+   - Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
+   - Update `config.MODEL_PATH` filename
+   - Update `wiki-offline.spec` model filename reference
+   - Test that Phi-3 chat tokens (`<|system|>`, `<|user|>`, `<|assistant|>`) still
+     work with Gemma 2 or update `_build_prompt` to use Gemma's template
+
+2. **Optional cleanup**:
+   - Remove unused `_SYSTEM_TEMPLATE` constant from `pipeline.py`
+
+3. **Windows installer build**:
+   - Complete the 4-step pre-build checklist in `wiki-offline.spec`
+   - `pip install pyinstaller && pyinstaller wiki-offline.spec`
+   - Ship `dist/WikiOffline/` to end users
