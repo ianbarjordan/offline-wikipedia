@@ -171,8 +171,9 @@ class Retriever:
         faiss.normalize_L2(vec)
 
         # 3. ANN search — returns (distances, indices) each shape (1, top_k)
-        #    For L2-normalized vectors the index returns squared L2 distances;
-        #    convert to cosine similarity via: cos_sim = 1 - (L2² / 2).
+        #    Index uses METRIC_INNER_PRODUCT; for L2-normalised vectors the
+        #    returned distances are inner products, which equal cosine
+        #    similarity directly (range 0.0 → 1.0, higher = more similar).
         distances, faiss_indices = self.index.search(vec, top_k)
         raw_indices: list[int] = faiss_indices[0].tolist()
         raw_distances: list[float] = distances[0].tolist()
@@ -180,7 +181,7 @@ class Retriever:
         # 4. Map FAISS positions → SQLite article IDs, drop -1 sentinels.
         #    Keep cosine similarity score paired with each valid id.
         valid_pairs: list[tuple[int, float]] = [
-            (self._id_map[fi], max(0.0, 1.0 - d / 2.0))
+            (self._id_map[fi], max(0.0, d))
             for fi, d in zip(raw_indices, raw_distances)
             if fi != -1 and fi in self._id_map
         ]

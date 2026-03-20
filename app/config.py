@@ -23,10 +23,13 @@ PROJECT_ROOT: Path = Path(__file__).parent.parent.resolve()
 TOP_K: int = 5    # Articles returned per query
 NPROBE: int = 32  # FAISS IVF cells searched per query (higher → better recall,
                   # slightly slower).  Has no effect on flat indexes.
-CONFIDENCE_THRESHOLD: float = 0.35  # Min cosine similarity for the top result to
+CONFIDENCE_THRESHOLD: float = 0.15  # Min cosine similarity for the top result to
                                      # pass the LLM confidence gate.  Queries whose
                                      # best match falls below this score return a
                                      # canned "not found" response without LLM call.
+                                     # Low value (0.15) is intentional: IVF-PQ
+                                     # quantization shrinks inner products, so a
+                                     # conservative threshold avoids false negatives.
 TITLE_BOOST: float = 2.0             # Rank positions a perfect query-title word
                                      # overlap is worth during post-retrieval rerank.
 
