@@ -24,6 +24,7 @@ Design notes
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -43,33 +44,42 @@ _STOPWORDS = frozenset({
     "what", "how", "why", "who", "when", "where", "was", "were",
 })
 
+_WORD_RE = re.compile(r'\b\w+\b')
+
 
 def _title_rerank(query: str, articles: list[dict]) -> list[dict]:
     """
     Boost articles whose title words overlap with the query.
 
-    A perfect title match is worth config.TITLE_BOOST rank positions.
-    FAISS rank order is preserved for articles with no title overlap.
-    Common stopwords and short tokens are excluded from the query word set
-    so that articles with semantically empty query terms aren't over-promoted.
+    Uses score-based (not rank-based) sorting so a semantically weaker article
+    that happens to sit at FAISS rank 0 cannot hold off a better title match.
+
+    Title-length normalisation penalises qualified titles like
+    "George Washington, Washington" (3 tokens) relative to the exact title
+    "George Washington" (2 tokens) when the query key-words number 2 — ensuring
+    the most-specific match wins even when both share identical word overlap.
+
+    Word tokens are extracted with a regex so punctuation (commas, hyphens)
+    does not produce false mismatches against the query word set.
     """
     if not articles:
         return articles
     q_words = {
-        w for w in query.lower().split()
+        w for w in _WORD_RE.findall(query.lower())
         if w not in _STOPWORDS and len(w) > 2
     }
     if not q_words:
         return articles
 
-    def sort_key(item: tuple[int, dict]) -> float:
-        rank, art = item
-        t_words = set(art["title"].lower().split())
+    def sort_key(art: dict) -> float:
+        t_tokens = _WORD_RE.findall(art["title"].lower())
+        t_words = set(t_tokens)
         overlap = len(q_words & t_words) / len(q_words)
-        return rank - config.TITLE_BOOST * overlap  # lower value = better rank
+        # Prefer titles whose token count is closest to the query key-word count.
+        length_ratio = len(q_words) / max(len(t_tokens), len(q_words))
+        return -(art["score"] + config.TITLE_BOOST * overlap * length_ratio)
 
-    reranked = sorted(enumerate(articles), key=sort_key)
-    return [art for _, art in reranked]
+    return sorted(articles, key=sort_key)
 
 
 class Retriever:

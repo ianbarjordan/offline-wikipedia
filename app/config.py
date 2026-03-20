@@ -20,7 +20,7 @@ PROJECT_ROOT: Path = Path(__file__).parent.parent.resolve()
 # ---------------------------------------------------------------------------
 # Retrieval
 # ---------------------------------------------------------------------------
-TOP_K: int = 5    # Articles returned per query
+TOP_K: int = 8    # Articles returned per query
 NPROBE: int = 32  # FAISS IVF cells searched per query (higher → better recall,
                   # slightly slower).  Has no effect on flat indexes.
 CONFIDENCE_THRESHOLD: float = 0.15  # Min cosine similarity for the top result to
