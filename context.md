@@ -381,6 +381,21 @@ _Changes:_
   to strip punctuation cleanly.
 - `TOP_K` increased `5 → 8` for a wider FAISS candidate pool.
 
+**Parser redirect-filter bug fix (`build/02_parse_articles.py`) — commit e0bb281**
+
+_Problem:_ The CirrusSearch `redirect` field on a content article lists pages that
+redirect TO it (incoming aliases). The parser treated any non-empty `redirect` as
+"this page IS a redirect" and skipped it — silently dropping ~62k articles including
+George Washington, Bubonic plague, Fishing, and any popular article with alternate names.
+
+_Fix:_ Removed the `if doc.get("redirect"):` filter entirely. True redirect pages
+have no `opening_text` or `text` and are already caught by the existing `no_text` check.
+
+_Result:_ 274,704 articles parsed (was 212,884) — 61,820 articles recovered.
+"Who is George Washington" now correctly returns the president article at rank 1 (score=0.900).
+
+---
+
 **SQL title-search supplement (`app/retriever.py`) — commit 2df2b8e**
 
 _Problem:_ After the reranking fix, the LLM correctly said "no info about George
@@ -440,9 +455,9 @@ synthetic set (no "George Washington" article exists there).
 ## Production Data State
 
 Full Simple English Wikipedia data has been built (March 2026 dump):
-- `data/wikipedia.db` — 212,884 articles, 408 MB
-- `data/wikipedia.faiss` — IVF-PQ index, 6.8 MB
-- `data/id_map.json` — 3.1 MB
+- `data/wikipedia.db` — 274,704 articles, 617 MB
+- `data/wikipedia.faiss` — IVF-PQ index, ~8 MB
+- `data/id_map.json` — ~4 MB
 
 The smoke test now writes to `scratch/smoke_data/` (isolated from production):
 - `scratch/smoke_data/smoke.db`
