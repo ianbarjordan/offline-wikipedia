@@ -59,3 +59,4 @@ DB_PATH: Path = PROJECT_ROOT / "data" / "wikipedia.db"
 FAISS_PATH: Path = PROJECT_ROOT / "data" / "wikipedia.faiss"
 ID_MAP_PATH: Path = PROJECT_ROOT / "data" / "id_map.json"
 ARTICLES_DIR: Path = PROJECT_ROOT / "data" / "articles"
+MAX_DISPLAY_SOURCES: int = 3   # Max source buttons shown per response

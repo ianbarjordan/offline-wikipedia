@@ -55,11 +55,14 @@ from retriever import Retriever
 # ---------------------------------------------------------------------------
 
 _SYSTEM_TEMPLATE = """\
-You are a helpful assistant that answers questions exclusively from the Wikipedia \
-context provided below. Do NOT use your training knowledge or add information \
-not present in the context. If the context does not clearly answer the question, \
-reply with: "I couldn't find reliable information on that in the provided Wikipedia \
-articles." Be concise, accurate, and cite sources using [N] notation where helpful.
+You are a helpful Wikipedia assistant. {grounding}
+
+Format your answers clearly:
+- Use plain prose. Do NOT use markdown headers or bullet points unless listing 3+ distinct items.
+- Keep answers concise: 2–4 sentences for simple facts, one short paragraph for explanations.
+- If the context gives a date, number, or name, quote it exactly.
+- Do not repeat the question back to the user.
+- Do not say "According to Wikipedia" or "The context says" — just answer directly.
 
 Wikipedia context:
 {context}"""
@@ -128,13 +131,15 @@ class Pipeline:
         prompt = _build_prompt(user_message, chat_history, context, low_confidence=low_confidence)
         stream = self._llm.generate(prompt, stream=True)
 
+        display = articles[:config.MAX_DISPLAY_SOURCES]
+
         if low_confidence:
             return _prepend_generator(
                 "I didn't find a strong Wikipedia match for your question, so this answer may be incomplete.\n\n",
                 stream,
-            ), articles
+            ), display
 
-        return stream, articles
+        return stream, display
 
 
 # ---------------------------------------------------------------------------
@@ -142,14 +147,12 @@ class Pipeline:
 # ---------------------------------------------------------------------------
 
 _GROUNDING_HIGH = (
-    "Answer exclusively from the Wikipedia context below.\n"
-    "Do NOT use your training knowledge.\n"
-    "If the context does not contain the answer, say you don't know."
+    "Answer exclusively from the context below — do not use your training knowledge."
 )
 
 _GROUNDING_LOW = (
-    "Answer using the Wikipedia context below as your primary source.\n"
-    "If the context is insufficient, say so briefly before answering."
+    "Answer using the context below as your primary source; "
+    "if it is insufficient, acknowledge that briefly."
 )
 
 
@@ -186,7 +189,7 @@ def _build_prompt(
     - Opening <|assistant|> token to prime generation
     """
     grounding = _GROUNDING_LOW if low_confidence else _GROUNDING_HIGH
-    system_text = f"{grounding}\n\nWikipedia context:\n{context}"
+    system_text = _SYSTEM_TEMPLATE.format(grounding=grounding, context=context)
 
     parts: list[str] = [f"<|system|>\n{system_text}<|end|>\n"]
 

@@ -68,6 +68,29 @@ def normalise_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Patterns that identify Wikipedia maintenance/template sentences to strip.
+# These appear in opening_text when a page was created with a template that
+# left placeholder text, or when maintenance banners leaked into the lead.
+_LEAD_NOISE_RE = re.compile(
+    r'\[Your (?:Name|name)\]'            # unfilled template placeholders
+    r'|\bWritten by\b'                   # article creation template
+    r'|This article (?:needs|may|does|has|is a|was|contains)'  # maintenance banners
+    r'|You can help Wikipedia'
+    r'|Please help (?:improve|expand)',
+    re.IGNORECASE,
+)
+
+
+def clean_lead(text: str) -> str:
+    """
+    Remove sentences containing Wikipedia maintenance/template noise.
+    Splits on sentence boundaries, drops noisy sentences, rejoins.
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    clean = [s for s in sentences if not _LEAD_NOISE_RE.search(s)]
+    return " ".join(clean).strip()
+
+
 def is_disambiguation(doc: dict) -> bool:
     """Return True if this document is a disambiguation page."""
     title: str = doc.get("title", "")
@@ -87,10 +110,10 @@ def extract_lead(doc: dict) -> str:
     """
     opening = normalise_whitespace(doc.get("opening_text") or "")
     if opening:
-        return truncate_words(opening, MAX_LEAD_WORDS)
+        return clean_lead(truncate_words(opening, MAX_LEAD_WORDS))
 
     body = normalise_whitespace(doc.get("text") or "")
-    return truncate_words(body, MAX_LEAD_WORDS)
+    return clean_lead(truncate_words(body, MAX_LEAD_WORDS))
 
 
 # ---------------------------------------------------------------------------

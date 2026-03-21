@@ -117,7 +117,7 @@ pipeline.query(user_message, chat_history)
     │
     ▼
 gui.py streaming callback → Gradio Chatbot
-    └─ source buttons → webbrowser.open(simple.wikipedia.org/wiki/{slug})
+    └─ source buttons → _open_file(data/articles/{id}.html)  [local HTML]
 ```
 
 ---
@@ -140,6 +140,7 @@ gui.py streaming callback → Gradio Chatbot
 
 All tuneable constants live in `app/config.py`:
 - `TOP_K`, `NPROBE`, `CONFIDENCE_THRESHOLD`, `TITLE_BOOST` — retrieval
+- `MAX_DISPLAY_SOURCES = 3` — max source buttons shown per response (pipeline returns full TOP_K to LLM, GUI only shows top 3)
 - `N_THREADS`, `N_GPU_LAYERS`, `CTX_WINDOW` — LLM performance
 - `EMBED_MODEL`, `EMBEDDING_DIM`, `CHAT_HISTORY_TURNS`
 - `MODEL_PATH`, `DB_PATH`, `FAISS_PATH`, `ID_MAP_PATH`, `ARTICLES_DIR`
@@ -325,6 +326,7 @@ instead of hard `chunk["choices"][0]["text"]` indexing.
 - Source buttons now open `https://simple.wikipedia.org/wiki/{url_slug}` in the
   default browser via `webbrowser.open()` instead of the local lead-only HTML file.
 - `urllib.parse.quote(slug, safe=":")` applied for URL safety.
+- **Reverted in UI quality pass (see below):** buttons now correctly open local HTML.
 
 **Confidence gate bugfix (`app/retriever.py`, `app/config.py`) — commit 96591db**
 - Score formula was wrong: `1.0 - d/2.0` is the squared-L2 conversion; the index
@@ -424,25 +426,52 @@ synthetic set (no "George Washington" article exists there).
 
 ---
 
+**UI/Quality pass — four fixes — commit (this session)**
+
+1. **New system prompt (`app/pipeline.py`)** — `_SYSTEM_TEMPLATE` restructured to
+   embed `{grounding}` inline and add explicit plain-prose formatting rules ("no markdown
+   headers or bullet points unless listing 3+ items", "don't say 'According to Wikipedia'",
+   etc.). `_GROUNDING_HIGH`/`_GROUNDING_LOW` shortened to single-line strings.
+   `_build_prompt` now uses `_SYSTEM_TEMPLATE.format(grounding=..., context=...)`.
+
+2. **Display source cap (`app/pipeline.py`, `app/config.py`)** — `MAX_DISPLAY_SOURCES=3`
+   added to config. `pipeline.query()` passes full `articles` list to `_build_context()`
+   (LLM sees all TOP_K=8 articles) but trims the returned list to `[:MAX_DISPLAY_SOURCES]`
+   so the GUI only shows the 3 most relevant source buttons.
+
+3. **Source buttons open local HTML (`app/gui.py`)** — `open_article()` now calls
+   `_open_file(config.ARTICLES_DIR / f"{art['id']}.html")` instead of
+   `webbrowser.open(simple.wikipedia.org/wiki/{slug})`. Removed `import webbrowser`
+   and `import urllib.parse` (no longer used).
+
+4. **Lead noise filter (`build/02_parse_articles.py`)** — `_LEAD_NOISE_RE` regex and
+   `clean_lead()` function added. Strips sentences containing Wikipedia maintenance
+   banners ("Written by: [Your Name]", "This article needs…", "You can help Wikipedia",
+   etc.) from lead text before writing to staging JSONL. `extract_lead()` applies
+   `clean_lead()` after truncation. Requires data rebuild (02→03→04) to take effect.
+
+_Smoke test:_ 44/44 passed.
+
+---
+
 ## Current File State
 
 | File | Status | Notes |
 |------|--------|-------|
-| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8` |
+| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3` |
 | `app/retriever.py` | Done | Score-based rerank; length normalisation; SQL title supplement |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
-| `app/pipeline.py` | Done | Three-way confidence gate; `_prepend_generator`; dual grounding |
-| `app/gui.py` | Done | `webbrowser.open` source links to simple.wikipedia.org |
+| `app/pipeline.py` | Done | Three-way confidence gate; new `_SYSTEM_TEMPLATE` with `{grounding}`/`{context}` params; display source cap |
+| `app/gui.py` | Done | Source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse |
-| `build/01–04` | Done | All build scripts written and smoke-tested |
+| `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads |
+| `build/01,03,04` | Done | All other build scripts written and smoke-tested |
 | `wiki-offline.spec` | Done | PyInstaller onedir spec |
 
 ---
 
 ## Known Issues / Limitations
 
-- **`_SYSTEM_TEMPLATE` is now dead code** in `pipeline.py`. Safe to delete in a
-  future cleanup pass.
 - **`llama_cpp` must be present** for `pipeline.py` to import (top-level via `llm.py`).
   For CI/test environments, install `llama-cpp-python` even when no GGUF is available.
 - **`embeddings.position_ids UNEXPECTED`** warning at Retriever load — benign,
@@ -469,13 +498,13 @@ The smoke test now writes to `scratch/smoke_data/` (isolated from production):
 
 ## Next Steps When Resuming
 
-1. **Model swap**:
+1. **Rebuild data** (to apply `clean_lead()` noise filter):
+   - `python build/02_parse_articles.py` → `03_build_sqlite.py` → `04_embed_and_index.py`
+
+2. **Model swap**:
    - Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
    - Update `config.MODEL_PATH` and `wiki-offline.spec` model filename
    - Verify or update Phi-3 chat tokens in `_build_prompt` for Gemma 2's template
-
-2. **Optional cleanup**:
-   - Remove unused `_SYSTEM_TEMPLATE` from `pipeline.py`
 
 3. **Windows installer build**:
    - Complete the 4-step pre-build checklist in `wiki-offline.spec`
