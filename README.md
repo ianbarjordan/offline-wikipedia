@@ -69,8 +69,9 @@ Re-running is safe — skips the download if the file already exists.
 python build/02_parse_articles.py
 ```
 
-Streams through the compressed dump, filters redirects and disambiguation pages,
-extracts title / lead / body. Output: `raw/articles_parsed.jsonl` (~230,000 articles).
+Streams through the compressed dump, filters disambiguation pages and articles
+with no text, extracts title / lead / body, and strips Wikipedia maintenance-banner
+sentences from lead text. Output: `raw/articles_parsed.jsonl` (~275,000 articles).
 
 **Step 03 — Build SQLite database and HTML files**
 
@@ -90,11 +91,15 @@ python build/04_embed_and_index.py
 Embeds all article leads with `all-MiniLM-L6-v2` on GPU, builds a FAISS
 IndexIVFPQ, and saves `data/wikipedia.faiss` and `data/id_map.json`.
 
-To force CPU (slower, ~2–3 hours vs ~15 minutes on GPU):
+The script auto-detects the best available device (CUDA > Apple MPS > CPU).
+To force a specific device:
 
 ```bat
 python build/04_embed_and_index.py --device cpu
+python build/04_embed_and_index.py --device cuda
 ```
+
+CPU is slower (~2–3 hours vs ~15 minutes on GPU).
 
 ---
 
@@ -195,9 +200,11 @@ All configuration constants are in `app/config.py`. Edit that file to change:
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `TOP_K` | `5` | Number of articles retrieved per query |
+| `TOP_K` | `8` | Articles retrieved from FAISS per query (all fed to LLM) |
+| `MAX_DISPLAY_SOURCES` | `3` | Source buttons shown in the UI per response |
+| `CONFIDENCE_THRESHOLD` | `0.15` | Min cosine similarity to pass the confidence gate |
 | `CHAT_HISTORY_TURNS` | `3` | Past exchanges included in LLM prompt |
-| `N_CTX` | `4096` | LLM context window (tokens) |
+| `CTX_WINDOW` | `4096` | LLM context window (tokens) |
 | `N_THREADS` | `cpu_count - 1` | CPU threads for inference |
 | `N_GPU_LAYERS` | `0` | GPU layers (0 = CPU-only for end users) |
 
@@ -207,5 +214,7 @@ All configuration constants are in `app/config.py`. Edit that file to change:
 
 - Source: [Simple English Wikipedia CirrusSearch dump](https://dumps.wikimedia.org/other/cirrussearch/current/)
 - Dump format: gzip-compressed NDJSON (alternating action / document line pairs)
-- ~230,000 main-namespace articles after filtering
+- ~275,000 main-namespace articles after filtering
 - Lead paragraphs capped at 300 words for embedding efficiency
+- Maintenance-banner sentences stripped from leads at parse time (`02_parse_articles.py`)
+- Source buttons open pre-rendered local HTML files (`data/articles/{id}.html`) — no internet required
