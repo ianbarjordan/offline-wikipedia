@@ -248,17 +248,25 @@ class Retriever:
                 (candidate_title, _MAX_TITLE_SUPPLEMENT),
             ).fetchall()
 
-            # Step 2: if exact match found nothing new, try LIKE-per-word
+            # Step 2: if exact match found nothing new, try LIKE-per-word.
+            # LIKE uses substring matching, so post-filter with whole-word
+            # tokenisation to avoid false positives (e.g. "Lightspeed Rescue"
+            # matching [%speed%, %light%] for a "speed of light" query).
             if not any(r["id"] not in existing_ids for r in extra_rows):
                 like_clauses = " AND ".join(
                     "LOWER(title) LIKE ?" for _ in q_ordered
                 )
-                like_params = [f"%{w}%" for w in q_ordered] + [_MAX_TITLE_SUPPLEMENT]
-                extra_rows = self._conn.execute(
+                like_params = [f"%{w}%" for w in q_ordered] + [_MAX_TITLE_SUPPLEMENT * 4]
+                candidates = self._conn.execute(
                     f"SELECT id, title, lead, url_slug FROM articles "
                     f"WHERE {like_clauses} LIMIT ?",
                     like_params,
                 ).fetchall()
+                q_word_set = set(q_ordered)
+                extra_rows = [
+                    r for r in candidates
+                    if q_word_set.issubset(set(_WORD_RE.findall(r["title"].lower())))
+                ][:_MAX_TITLE_SUPPLEMENT]
 
             for row in extra_rows:
                 if row["id"] not in existing_ids:

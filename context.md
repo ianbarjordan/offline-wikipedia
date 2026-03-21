@@ -426,6 +426,28 @@ synthetic set (no "George Washington" article exists there).
 
 ---
 
+**SQL title supplement LIKE word-boundary fix (`app/retriever.py`) — this session**
+
+_Problem:_ The LIKE-per-word fallback in the SQL title supplement used `%word%` substring
+matching. For a "speed of light" query, `q_ordered = ["speed", "light"]`, the query
+`LIKE '%speed%' AND LIKE '%light%'` matched "Lightspeed (company)", "Lightspeed (magazine)",
+and "Power Rangers Lightspeed Rescue" — all injected with score=0.9, polluting displayed
+sources.
+
+_Fix:_ After fetching LIKE candidates, apply a Python word-token post-filter using
+`_WORD_RE.findall()` to confirm each query word appears as a complete token in the title
+(not as a substring of a compound word). Candidates that don't pass are dropped before
+appending to the article pool. Increased the initial LIKE fetch limit to `_MAX_TITLE_SUPPLEMENT * 4`
+to compensate for post-filtering attrition.
+
+_Result:_ "Speed of light" correctly appears without "Lightspeed Rescue" noise.
+Entity queries (George Washington, FIFA World Cup, Napoleon) unaffected — their exact
+title tokens already passed the filter.
+
+_Smoke test:_ 44/44 passed.
+
+---
+
 **UI/Quality pass — four fixes — commit (this session)**
 
 1. **New system prompt (`app/pipeline.py`)** — `_SYSTEM_TEMPLATE` restructured to
@@ -459,7 +481,7 @@ _Smoke test:_ 44/44 passed.
 | File | Status | Notes |
 |------|--------|-------|
 | `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3` |
-| `app/retriever.py` | Done | Score-based rerank; length normalisation; SQL title supplement |
+| `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
 | `app/pipeline.py` | Done | Three-way confidence gate; new `_SYSTEM_TEMPLATE` with `{grounding}`/`{context}` params; display source cap |
 | `app/gui.py` | Done | Source buttons open local `data/articles/{id}.html` via `_open_file()` |
