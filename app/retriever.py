@@ -46,6 +46,11 @@ _STOPWORDS = frozenset({
 
 _WORD_RE = re.compile(r'\b\w+\b')
 
+_TITLE_EXACT_SCORE    = 0.9  # Synthetic score assigned to SQL-injected exact-title
+                              # matches; high enough to beat FAISS place articles
+                              # after title reranking, while staying in [0, 1].
+_MAX_TITLE_SUPPLEMENT = 3    # Max extra articles added to the FAISS pool per query.
+
 
 def _title_rerank(query: str, articles: list[dict]) -> list[dict]:
     """
@@ -212,7 +217,7 @@ class Retriever:
         rank: dict[int, int] = {sid: pos for pos, sid in enumerate(sqlite_ids)}
         rows_sorted = sorted(rows, key=lambda r: rank.get(r["id"], 999))
 
-        return _title_rerank(query, [
+        articles: list[dict] = [
             {
                 "id": r["id"],
                 "title": r["title"],
@@ -221,7 +226,51 @@ class Retriever:
                 "score": score_map.get(r["id"], 0.0),
             }
             for r in rows_sorted
-        ])
+        ]
+
+        # ── Supplementary title search ─────────────────────────────────────
+        # FAISS can miss the best-titled article for entity-name queries when
+        # same-name city/place articles embed closer to the question structure.
+        # Inject SQL title-matched articles into the candidate pool so that
+        # _title_rerank always has the right article available to promote.
+        q_ordered = [
+            w for w in _WORD_RE.findall(query.lower())
+            if w not in _STOPWORDS and len(w) > 2
+        ]
+        if q_ordered and len(q_ordered) <= 4:
+            existing_ids = {a["id"] for a in articles}
+            candidate_title = " ".join(q_ordered)
+
+            # Step 1: exact case-insensitive title match (zero false positives)
+            extra_rows = self._conn.execute(
+                "SELECT id, title, lead, url_slug FROM articles "
+                "WHERE LOWER(title) = ? LIMIT ?",
+                (candidate_title, _MAX_TITLE_SUPPLEMENT),
+            ).fetchall()
+
+            # Step 2: if exact match found nothing new, try LIKE-per-word
+            if not any(r["id"] not in existing_ids for r in extra_rows):
+                like_clauses = " AND ".join(
+                    "LOWER(title) LIKE ?" for _ in q_ordered
+                )
+                like_params = [f"%{w}%" for w in q_ordered] + [_MAX_TITLE_SUPPLEMENT]
+                extra_rows = self._conn.execute(
+                    f"SELECT id, title, lead, url_slug FROM articles "
+                    f"WHERE {like_clauses} LIMIT ?",
+                    like_params,
+                ).fetchall()
+
+            for row in extra_rows:
+                if row["id"] not in existing_ids:
+                    articles.append({
+                        "id":       row["id"],
+                        "title":    row["title"],
+                        "lead":     row["lead"],
+                        "url_slug": row["url_slug"],
+                        "score":    _TITLE_EXACT_SCORE,
+                    })
+
+        return _title_rerank(query, articles)
 
     # ------------------------------------------------------------------
     # Resource management
