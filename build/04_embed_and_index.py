@@ -22,8 +22,9 @@ Index design notes
   Training  : random sample of up to TRAIN_SAMPLE_SIZE vectors
 
 Usage:
-    python build/04_embed_and_index.py
-    python build/04_embed_and_index.py --device cpu
+    python build/04_embed_and_index.py                      # auto-detects GPU
+    python build/04_embed_and_index.py --device cpu         # force CPU
+    python build/04_embed_and_index.py --batch-size 1024    # larger GPU batch
     python build/04_embed_and_index.py --batch-size 256 --train-sample 50000
 """
 
@@ -52,11 +53,69 @@ NLIST = 1024
 M = 16
 NBITS = 8
 
-DEFAULT_BATCH_SIZE = 512
+DEFAULT_BATCH_SIZE_GPU = 1024   # GPU can process larger batches efficiently
+DEFAULT_BATCH_SIZE_CPU = 256    # Smaller batches keep CPU RAM stable
 DEFAULT_TRAIN_SAMPLE = 100_000
 
 # How many vectors to add to the index per call (keeps RAM stable)
 ADD_BATCH = 10_000
+
+
+# ---------------------------------------------------------------------------
+# Device selection
+# ---------------------------------------------------------------------------
+
+
+def resolve_device(requested: str) -> str:
+    """
+    Resolve 'auto' to the best available device; validate explicit choices.
+
+    Priority order for 'auto': cuda → mps → cpu
+    """
+    try:
+        import torch
+    except ImportError:
+        if requested in ("cuda", "mps"):
+            print(
+                f"WARNING: torch not importable; cannot use {requested}. "
+                "Falling back to CPU.",
+                file=sys.stderr,
+            )
+        return "cpu"
+
+    if requested == "auto":
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            print(f"Auto-selected device: cuda  ({name})")
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            print("Auto-selected device: mps  (Apple Silicon)")
+            return "mps"
+        print("Auto-selected device: cpu  (no GPU detected)")
+        return "cpu"
+
+    if requested == "cuda":
+        if not torch.cuda.is_available():
+            print(
+                "WARNING: --device cuda requested but CUDA is not available. "
+                "Falling back to CPU.",
+                file=sys.stderr,
+            )
+            return "cpu"
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        return "cuda"
+
+    if requested == "mps":
+        if not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+            print(
+                "WARNING: --device mps requested but MPS is not available. "
+                "Falling back to CPU.",
+                file=sys.stderr,
+            )
+            return "cpu"
+        return "mps"
+
+    return "cpu"
 
 
 # ---------------------------------------------------------------------------
@@ -220,15 +279,18 @@ def main() -> None:
     )
     parser.add_argument(
         "--device",
-        choices=["cuda", "cpu"],
-        default="cuda",
-        help="Compute device for sentence-transformers.",
+        choices=["auto", "cuda", "mps", "cpu"],
+        default="auto",
+        help="Compute device for sentence-transformers. "
+             "'auto' picks cuda > mps > cpu.",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=DEFAULT_BATCH_SIZE,
-        help="Embedding batch size.",
+        default=None,
+        help="Embedding batch size. "
+             f"Defaults to {DEFAULT_BATCH_SIZE_GPU} for GPU, "
+             f"{DEFAULT_BATCH_SIZE_CPU} for CPU.",
     )
     parser.add_argument(
         "--train-sample",
@@ -247,25 +309,11 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if args.device == "cuda":
-        try:
-            import torch
-            if not torch.cuda.is_available():
-                print(
-                    "WARNING: --device cuda requested but CUDA is not available. "
-                    "Falling back to CPU (embedding will be much slower).",
-                    file=sys.stderr,
-                )
-                args.device = "cpu"
-            else:
-                gpu_name = torch.cuda.get_device_name(0)
-                print(f"CUDA device: {gpu_name}")
-        except ImportError:
-            print(
-                "WARNING: torch not importable; falling back to CPU.",
-                file=sys.stderr,
-            )
-            args.device = "cpu"
+    device = resolve_device(args.device)
+    batch_size = args.batch_size or (
+        DEFAULT_BATCH_SIZE_GPU if device in ("cuda", "mps") else DEFAULT_BATCH_SIZE_CPU
+    )
+    print(f"Device: {device}   Batch size: {batch_size}")
 
     # --- Load data ---
     ids, leads = load_articles(args.db)
@@ -274,12 +322,12 @@ def main() -> None:
         sys.exit(1)
 
     # --- Embed ---
-    print(f"\nLoading model '{MODEL_NAME}' on {args.device} ...")
-    model = SentenceTransformer(MODEL_NAME, device=args.device)
+    print(f"\nLoading model '{MODEL_NAME}' on {device} ...")
+    model = SentenceTransformer(MODEL_NAME, device=device)
     print(f"  Model loaded.")
 
-    print(f"\nEmbedding {len(leads):,} lead paragraphs (batch_size={args.batch_size}) ...")
-    vectors = embed_all(leads, model, args.batch_size)
+    print(f"\nEmbedding {len(leads):,} lead paragraphs (batch_size={batch_size}) ...")
+    vectors = embed_all(leads, model, batch_size)
     print(f"  Embedding matrix: {vectors.shape}  dtype={vectors.dtype}")
 
     # --- Build FAISS index ---
