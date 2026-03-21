@@ -426,41 +426,43 @@ synthetic set (no "George Washington" article exists there).
 
 ## Known Issues / Limitations
 
-- **`data/wikipedia.db` currently contains only 30 articles** (smoke test synthetic
-  set). Every run of `scratch/smoke_test_e2e.py` overwrites the production DB at
-  `data/wikipedia.db`. The full Wikipedia build pipeline must be re-run to restore
-  real data. Consider giving the smoke test its own `data/smoke_test.db` path.
 - **`_SYSTEM_TEMPLATE` is now dead code** in `pipeline.py`. Safe to delete in a
   future cleanup pass.
 - **`llama_cpp` must be present** for `pipeline.py` to import (top-level via `llm.py`).
   For CI/test environments, install `llama-cpp-python` even when no GGUF is available.
 - **`embeddings.position_ids UNEXPECTED`** warning at Retriever load — benign,
   expected for `all-MiniLM-L6-v2` with sentence-transformers 5.x.
-- **Model swap still pending** for full-Wikipedia build: `phi-3-mini-q4_k_m.gguf`
-  should be replaced with `gemma-2-2b-q4_k_m.gguf`.
+- **Model swap still pending**: `phi-3-mini-q4_k_m.gguf` should be replaced with
+  `gemma-2-2b-q4_k_m.gguf`.
+
+---
+
+## Production Data State
+
+Full Simple English Wikipedia data has been built (March 2026 dump):
+- `data/wikipedia.db` — 212,884 articles, 408 MB
+- `data/wikipedia.faiss` — IVF-PQ index, 6.8 MB
+- `data/id_map.json` — 3.1 MB
+
+The smoke test now writes to `scratch/smoke_data/` (isolated from production):
+- `scratch/smoke_data/smoke.db`
+- `scratch/smoke_data/smoke.faiss`
+- `scratch/smoke_data/smoke_id_map.json`
+- `scratch/smoke_data/articles/`
 
 ---
 
 ## Next Steps When Resuming
 
-1. **Rebuild production data** (current DB is only 30 smoke-test articles):
-   ```
-   python3 build/01_download_wiki.py
-   python3 build/02_parse_articles.py
-   python3 build/03_build_sqlite.py
-   python3 build/04_embed_and_index.py
-   ```
-
-2. **Model swap**:
+1. **Model swap**:
    - Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
    - Update `config.MODEL_PATH` and `wiki-offline.spec` model filename
    - Verify or update Phi-3 chat tokens in `_build_prompt` for Gemma 2's template
 
-3. **Optional cleanup**:
+2. **Optional cleanup**:
    - Remove unused `_SYSTEM_TEMPLATE` from `pipeline.py`
-   - Give smoke test its own DB path so it doesn't clobber `data/wikipedia.db`
 
-4. **Windows installer build**:
+3. **Windows installer build**:
    - Complete the 4-step pre-build checklist in `wiki-offline.spec`
    - `pip install pyinstaller && pyinstaller wiki-offline.spec`
    - Ship `dist/WikiOffline/` to end users

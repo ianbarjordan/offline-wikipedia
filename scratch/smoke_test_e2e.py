@@ -155,16 +155,25 @@ def stage_1_generate_jsonl() -> Path:
 # Stage 2 — Build SQLite DB + HTML articles
 # ---------------------------------------------------------------------------
 
+SMOKE_DATA_DIR = PROJECT_ROOT / "scratch" / "smoke_data"
+SMOKE_DB_PATH       = SMOKE_DATA_DIR / "smoke.db"
+SMOKE_FAISS_PATH    = SMOKE_DATA_DIR / "smoke.faiss"
+SMOKE_ID_MAP_PATH   = SMOKE_DATA_DIR / "smoke_id_map.json"
+SMOKE_ARTICLES_DIR  = SMOKE_DATA_DIR / "articles"
+
+
 def stage_2_build_sqlite(jsonl_path: Path) -> None:
     section("Stage 2 — Build SQLite DB + HTML articles (build/03)")
+    SMOKE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SMOKE_ARTICLES_DIR.mkdir(parents=True, exist_ok=True)
     import subprocess
     result = subprocess.run(
         [
             sys.executable,
             str(PROJECT_ROOT / "build" / "03_build_sqlite.py"),
             "--staging", str(jsonl_path),
-            "--db", str(PROJECT_ROOT / "data" / "wikipedia.db"),
-            "--articles-dir", str(PROJECT_ROOT / "data" / "articles"),
+            "--db", str(SMOKE_DB_PATH),
+            "--articles-dir", str(SMOKE_ARTICLES_DIR),
         ],
         capture_output=True,
         text=True,
@@ -174,17 +183,15 @@ def stage_2_build_sqlite(jsonl_path: Path) -> None:
         print(result.stderr.strip())
     check("build/03 exit code 0", result.returncode == 0, f"rc={result.returncode}")
 
-    db_path = PROJECT_ROOT / "data" / "wikipedia.db"
-    check("wikipedia.db created", db_path.exists(), str(db_path))
+    check("smoke.db created", SMOKE_DB_PATH.exists(), str(SMOKE_DB_PATH))
 
     import sqlite3
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(SMOKE_DB_PATH)
     count = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
     conn.close()
     check("Row count matches", count == len(ARTICLES), f"{count} rows")
 
-    articles_dir = PROJECT_ROOT / "data" / "articles"
-    html_files = list(articles_dir.glob("*.html"))
+    html_files = list(SMOKE_ARTICLES_DIR.glob("*.html"))
     check("HTML files created", len(html_files) == len(ARTICLES),
           f"{len(html_files)} html files")
 
@@ -201,9 +208,9 @@ def stage_3_build_faiss() -> None:
             sys.executable,
             str(PROJECT_ROOT / "build" / "04_embed_and_index.py"),
             "--device", "cpu",
-            "--db", str(PROJECT_ROOT / "data" / "wikipedia.db"),
-            "--faiss-out", str(PROJECT_ROOT / "data" / "wikipedia.faiss"),
-            "--id-map-out", str(PROJECT_ROOT / "data" / "id_map.json"),
+            "--db", str(SMOKE_DB_PATH),
+            "--faiss-out", str(SMOKE_FAISS_PATH),
+            "--id-map-out", str(SMOKE_ID_MAP_PATH),
         ],
         capture_output=True,
         text=True,
@@ -214,12 +221,10 @@ def stage_3_build_faiss() -> None:
         print(result.stderr.strip()[-500:])
     check("build/04 exit code 0", result.returncode == 0, f"rc={result.returncode}")
 
-    faiss_path = PROJECT_ROOT / "data" / "wikipedia.faiss"
-    id_map_path = PROJECT_ROOT / "data" / "id_map.json"
-    check("wikipedia.faiss created", faiss_path.exists())
-    check("id_map.json created",     id_map_path.exists())
+    check("smoke.faiss created",    SMOKE_FAISS_PATH.exists())
+    check("smoke_id_map.json created", SMOKE_ID_MAP_PATH.exists())
 
-    id_map = json.loads(id_map_path.read_text())
+    id_map = json.loads(SMOKE_ID_MAP_PATH.read_text())
     check("id_map non-empty", len(id_map) == len(ARTICLES),
           f"{len(id_map)} entries")
 
@@ -233,7 +238,11 @@ def stage_4_retriever() -> "Retriever":
     from retriever import Retriever
 
     t0 = time.perf_counter()
-    r = Retriever()
+    r = Retriever(
+        faiss_path=SMOKE_FAISS_PATH,
+        id_map_path=SMOKE_ID_MAP_PATH,
+        db_path=SMOKE_DB_PATH,
+    )
     elapsed = time.perf_counter() - t0
     check("Retriever loaded", True, f"{elapsed:.1f}s")
 
