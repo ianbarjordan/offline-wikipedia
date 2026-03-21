@@ -364,12 +364,57 @@ _Smoke test result:_ `scratch/smoke_test_e2e.py` — **44/44 checks passed** (9.
 
 ---
 
+**Score-based title rerank + TOP_K increase (`app/retriever.py`, `app/config.py`) — commit e809e72**
+
+_Problem:_ `_title_rerank` was rank-based (`rank - TITLE_BOOST * overlap`). For
+"Who is George Washington," both the city and person articles had `overlap=1.0` but
+the city at FAISS rank 0 permanently beat the person at rank 2. Also, `str.split()`
+on "George, Washington" produced `"washington,"` as a token, causing false full-overlap.
+
+_Changes:_
+- Sort key changed to `-(score + TITLE_BOOST * overlap * length_ratio)` — score-based,
+  not rank-based.
+- `length_ratio = len(q_words) / max(len(title_tokens), len(q_words))` — penalises
+  qualified titles ("George Washington, Washington", 3 tokens) vs exact matches
+  ("George Washington", 2 tokens) for a 2-word query.
+- Word tokenisation switched from `str.split()` to `_WORD_RE = re.compile(r'\b\w+\b')`
+  to strip punctuation cleanly.
+- `TOP_K` increased `5 → 8` for a wider FAISS candidate pool.
+
+**SQL title-search supplement (`app/retriever.py`) — commit 2df2b8e**
+
+_Problem:_ After the reranking fix, the LLM correctly said "no info about George
+Washington the president" — because the article was never in the FAISS top-8 at all.
+`all-MiniLM-L6-v2` embeds "Who is George Washington" close to "X is a Y" sentence
+structures, so city lead paragraphs ("George, Washington is a city…") score higher
+than the biographical president article.
+
+_Changes (all in `retriever.search()`, after FAISS results are assembled):_
+- Extract `q_ordered` (key words, same stopword/length filter as `_title_rerank`).
+- For queries with ≤ 4 key-words, run a supplementary SQL lookup:
+  1. `WHERE LOWER(title) = ?` exact match (zero false positives)
+  2. Fallback to `LIKE`-per-word if exact adds nothing new
+- Articles found by SQL but absent from FAISS are appended with
+  `score = _TITLE_EXACT_SCORE = 0.9`, ensuring `_title_rerank` promotes them
+  above any city article (city score ~0.72 + boost < president 0.9 + boost).
+- `_MAX_TITLE_SUPPLEMENT = 3` caps context growth.
+
+_Net effect for "Who is George Washington":_
+- FAISS returns city articles; SQL injects "George Washington" with score=0.9
+- `_title_rerank` combined scores: president=2.90, city=2.72 → president first
+- LLM receives the correct article and answers about the founding father
+
+_Smoke test:_ 44/44 passed. SQL supplement silently adds nothing for the 30-article
+synthetic set (no "George Washington" article exists there).
+
+---
+
 ## Current File State
 
 | File | Status | Notes |
 |------|--------|-------|
-| `app/config.py` | Done | `CONFIDENCE_THRESHOLD = 0.15`, `TITLE_BOOST = 2.0` |
-| `app/retriever.py` | Done | Score = `max(0.0, d)` from METRIC_INNER_PRODUCT; `_title_rerank` |
+| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8` |
+| `app/retriever.py` | Done | Score-based rerank; length normalisation; SQL title supplement |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
 | `app/pipeline.py` | Done | Three-way confidence gate; `_prepend_generator`; dual grounding |
 | `app/gui.py` | Done | `webbrowser.open` source links to simple.wikipedia.org |
@@ -381,36 +426,41 @@ _Smoke test result:_ `scratch/smoke_test_e2e.py` — **44/44 checks passed** (9.
 
 ## Known Issues / Limitations
 
-- **`_SYSTEM_TEMPLATE` is now dead code** in `pipeline.py`. It was the original
-  system message constant and is no longer called by `_build_prompt`. Safe to delete
-  in a future cleanup pass; left in place to avoid unnecessary churn.
-- **`llama_cpp` must be present** for `pipeline.py` to import — it is a top-level
-  module import via `llm.py`. This caused the e2e smoke test to crash at Stage 6
-  before `llama-cpp-python` was installed in the dev environment. In production
-  this is expected; for CI/testing environments, `llama-cpp-python` must be installed
-  even when a real model is absent (smoke test uses MockLLM to avoid loading the GGUF).
-- **`embeddings.position_ids UNEXPECTED`** warning from sentence-transformers at
-  Retriever load time. Benign — reported by the new LOAD REPORT feature in
-  sentence-transformers 5.x; the key is simply not present in `all-MiniLM-L6-v2`'s
-  saved weights, which is expected for this architecture.
+- **`data/wikipedia.db` currently contains only 30 articles** (smoke test synthetic
+  set). Every run of `scratch/smoke_test_e2e.py` overwrites the production DB at
+  `data/wikipedia.db`. The full Wikipedia build pipeline must be re-run to restore
+  real data. Consider giving the smoke test its own `data/smoke_test.db` path.
+- **`_SYSTEM_TEMPLATE` is now dead code** in `pipeline.py`. Safe to delete in a
+  future cleanup pass.
+- **`llama_cpp` must be present** for `pipeline.py` to import (top-level via `llm.py`).
+  For CI/test environments, install `llama-cpp-python` even when no GGUF is available.
+- **`embeddings.position_ids UNEXPECTED`** warning at Retriever load — benign,
+  expected for `all-MiniLM-L6-v2` with sentence-transformers 5.x.
 - **Model swap still pending** for full-Wikipedia build: `phi-3-mini-q4_k_m.gguf`
-  should be replaced with `gemma-2-2b-q4_k_m.gguf` for better instruction-following.
+  should be replaced with `gemma-2-2b-q4_k_m.gguf`.
 
 ---
 
 ## Next Steps When Resuming
 
-1. **Model swap** (pending from prior session):
+1. **Rebuild production data** (current DB is only 30 smoke-test articles):
+   ```
+   python3 build/01_download_wiki.py
+   python3 build/02_parse_articles.py
+   python3 build/03_build_sqlite.py
+   python3 build/04_embed_and_index.py
+   ```
+
+2. **Model swap**:
    - Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
-   - Update `config.MODEL_PATH` filename
-   - Update `wiki-offline.spec` model filename reference
-   - Test that Phi-3 chat tokens (`<|system|>`, `<|user|>`, `<|assistant|>`) still
-     work with Gemma 2 or update `_build_prompt` to use Gemma's template
+   - Update `config.MODEL_PATH` and `wiki-offline.spec` model filename
+   - Verify or update Phi-3 chat tokens in `_build_prompt` for Gemma 2's template
 
-2. **Optional cleanup**:
-   - Remove unused `_SYSTEM_TEMPLATE` constant from `pipeline.py`
+3. **Optional cleanup**:
+   - Remove unused `_SYSTEM_TEMPLATE` from `pipeline.py`
+   - Give smoke test its own DB path so it doesn't clobber `data/wikipedia.db`
 
-3. **Windows installer build**:
+4. **Windows installer build**:
    - Complete the 4-step pre-build checklist in `wiki-offline.spec`
    - `pip install pyinstaller && pyinstaller wiki-offline.spec`
    - Ship `dist/WikiOffline/` to end users
