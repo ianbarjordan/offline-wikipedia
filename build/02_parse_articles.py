@@ -124,7 +124,6 @@ def parse_dump(dump_path: Path, out_path: Path) -> dict:
     """
     counts = {
         "written": 0,
-        "redirect": 0,
         "disambiguation": 0,
         "non_main_ns": 0,
         "no_text": 0,
@@ -171,9 +170,12 @@ def parse_dump(dump_path: Path, out_path: Path) -> dict:
                 counts["non_main_ns"] += 1
                 continue
 
-            if doc.get("redirect"):
-                counts["redirect"] += 1
-                continue
+            # NOTE: The CirrusSearch "redirect" field on a content article lists
+            # pages that redirect TO it (incoming aliases) — it does NOT mean
+            # this page itself is a redirect.  True redirect pages have no
+            # opening_text or text, so they are caught by the no_text check
+            # below.  Filtering on redirect here incorrectly drops popular
+            # articles like "George Washington" that have many incoming aliases.
 
             if is_disambiguation(doc):
                 counts["disambiguation"] += 1
@@ -238,10 +240,9 @@ def main() -> None:
     out_size_mb = args.out.stat().st_size / 1_048_576
     print(f"\nParsing complete.")
     print(f"  Articles written         : {counts['written']:>10,}")
-    print(f"  Skipped — redirect       : {counts['redirect']:>10,}")
     print(f"  Skipped — disambiguation : {counts['disambiguation']:>10,}")
     print(f"  Skipped — non-main ns    : {counts['non_main_ns']:>10,}")
-    print(f"  Skipped — no text        : {counts['no_text']:>10,}")
+    print(f"  Skipped — no text/redir  : {counts['no_text']:>10,}")
     print(f"  Parse errors             : {counts['parse_error']:>10,}")
     print(f"\n  Staging file : {args.out}  ({out_size_mb:.1f} MB)")
     print(f"\nNext step: python build/03_build_sqlite.py")
