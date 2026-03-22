@@ -154,7 +154,8 @@ jobs:
 
         # articles.zip must contain an articles\ folder at its root,
         # e.g.:  zip -r articles.zip articles/   (from inside data/)
-        Expand-Archive -Path download-tmp\articles.zip -DestinationPath data\
+        # -Force overwrites the .gitkeep placeholder already in data\articles\.
+        Expand-Archive -Path download-tmp\articles.zip -DestinationPath data\ -Force
         Write-Host "Articles extracted: $((Get-ChildItem data\articles -File).Count) files"
 
     # ------------------------------------------------------------------
