@@ -91,7 +91,16 @@ def resolve_device(requested: str) -> str:
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             print("Auto-selected device: mps  (Apple Silicon)")
             return "mps"
-        print("Auto-selected device: cpu  (no GPU detected)")
+        if getattr(torch.version, "cuda", None):
+            print(
+                "Auto-selected device: cpu\n"
+                "  WARNING: PyTorch was built with CUDA support "
+                f"(cuda {torch.version.cuda}) but no GPU is accessible.\n"
+                "  If running in Docker, restart the container with --gpus all.\n"
+                "  To force CPU: pass --device cpu"
+            )
+        else:
+            print("Auto-selected device: cpu  (no GPU detected)")
         return "cpu"
 
     if requested == "cuda":
