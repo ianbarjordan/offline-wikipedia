@@ -13,8 +13,8 @@
 #                     data/id_map.json, data/articles/
 #
 # 2. Download the LLM model (manual):
-#       Place phi-3-mini-q4_k_m.gguf in models/
-#    Source: https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf
+#       Place gemma-2-2b-q4_k_m.gguf in models/
+#    Source: https://huggingface.co/bartowski/gemma-2-2b-it-GGUF
 #
 # 3. Pre-cache the embedding model so it can be bundled offline:
 #       python -c "from sentence_transformers import SentenceTransformer; \
@@ -81,20 +81,26 @@ datas = []
 
 # -- Gradio UI assets -------------------------------------------------------
 # Gradio serves its frontend from these directories at runtime.
+# Directories are always included; individual files are conditional because
+# their presence varies across Gradio patch versions (e.g. hash_seed.txt
+# was dropped in some builds).
 datas += [
     (str(GRADIO_DIR / "templates"),          "gradio/templates"),
     (str(GRADIO_DIR / "_simple_templates"),  "gradio/_simple_templates"),
     (str(GRADIO_DIR / "icons"),              "gradio/icons"),
     (str(GRADIO_DIR / "media_assets"),       "gradio/media_assets"),
-    (str(GRADIO_DIR / "hash_seed.txt"),      "gradio"),
-    (str(GRADIO_DIR / "package.json"),       "gradio"),
 ]
+for _f in ["hash_seed.txt", "package.json"]:
+    if (GRADIO_DIR / _f).exists():
+        datas.append((str(GRADIO_DIR / _f), "gradio"))
 
 # -- gradio_client ----------------------------------------------------------
 datas += [
-    (str(GRADIO_CLIENT_DIR / "types.json"),  "gradio_client"),
     (str(GRADIO_CLIENT_DIR / "package.json"), "gradio_client"),
 ]
+for _f in ["types.json"]:
+    if (GRADIO_CLIENT_DIR / _f).exists():
+        datas.append((str(GRADIO_CLIENT_DIR / _f), "gradio_client"))
 
 # -- llama_cpp shared libraries ---------------------------------------------
 # llama_cpp resolves its .so/.dll files as:
@@ -125,7 +131,7 @@ for _name, _hint in [
     ("data/wikipedia.db",     "Run build/03_build_sqlite.py"),
     ("data/wikipedia.faiss",  "Run build/04_embed_and_index.py"),
     ("data/id_map.json",      "Run build/04_embed_and_index.py"),
-    ("models/phi-3-mini-q4_k_m.gguf", "Download from HuggingFace"),
+    ("models/gemma-2-2b-q4_k_m.gguf", "Download from HuggingFace"),
 ]:
     if not (_root / _name).exists():
         import warnings as _w

@@ -42,7 +42,7 @@ EMBEDDING_DIM: int = 384
 # ---------------------------------------------------------------------------
 # Language model
 # ---------------------------------------------------------------------------
-MODEL_PATH: Path = PROJECT_ROOT / "models" / "phi-3-mini-q4_k_m.gguf"
+MODEL_PATH: Path = PROJECT_ROOT / "models" / "gemma-2-2b-q4_k_m.gguf"
 CTX_WINDOW: int = 4096                        # Token context window
 N_GPU_LAYERS: int = 0                         # 0 = CPU-only (end-user machines)
 N_THREADS: int = max(1, (os.cpu_count() or 2) - 1)  # Leave one core for the OS

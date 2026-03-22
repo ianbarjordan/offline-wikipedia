@@ -15,20 +15,21 @@ Public API
 
 Prompt format
 -------------
-Phi-3 Mini uses special tokens for its chat template:
+Gemma 2 IT uses the following chat template (no dedicated system token):
 
-    <|system|>
-    {system_message}<|end|>
-    <|user|>
-    {user_turn}<|end|>
-    <|assistant|>
-    {assistant_turn}<|end|>
-    <|user|>
-    {current_message}<|end|>
-    <|assistant|>
+    <start_of_turn>user
+    {system_message}
 
-The system message embeds the retrieved Wikipedia context so the model
-answers from that context rather than from its parametric memory.
+    {user_turn}<end_of_turn>
+    <start_of_turn>model
+    {assistant_turn}<end_of_turn>
+    <start_of_turn>user
+    {current_message}<end_of_turn>
+    <start_of_turn>model
+
+The system message (with Wikipedia context) is prepended to the first
+user turn, which is the standard approach for Gemma 2 instruction-tuned
+models that have no <|system|> special token.
 
 Design notes
 ------------
@@ -180,26 +181,34 @@ def _build_prompt(
     low_confidence: bool = False,
 ) -> str:
     """
-    Assemble the full Phi-3 chat prompt string.
+    Assemble the full Gemma 2 chat prompt string.
 
     Includes:
-    - System message with embedded Wikipedia context
+    - System message (prepended to first user turn) with embedded Wikipedia context
     - Last config.CHAT_HISTORY_TURNS (user, assistant) exchanges
     - Current user message
-    - Opening <|assistant|> token to prime generation
+    - Opening <start_of_turn>model token to prime generation
     """
     grounding = _GROUNDING_LOW if low_confidence else _GROUNDING_HIGH
     system_text = _SYSTEM_TEMPLATE.format(grounding=grounding, context=context)
 
-    parts: list[str] = [f"<|system|>\n{system_text}<|end|>\n"]
-
     recent_history = chat_history[-config.CHAT_HISTORY_TURNS :]
-    for user_turn, assistant_turn in recent_history:
-        parts.append(f"<|user|>\n{user_turn}<|end|>\n")
-        parts.append(f"<|assistant|>\n{assistant_turn}<|end|>\n")
+    parts: list[str] = []
 
-    parts.append(f"<|user|>\n{user_message}<|end|>\n")
-    parts.append("<|assistant|>\n")
+    if recent_history:
+        # System injected into the first historical user turn
+        first_user, first_assistant = recent_history[0]
+        parts.append(f"<start_of_turn>user\n{system_text}\n\n{first_user}<end_of_turn>\n")
+        parts.append(f"<start_of_turn>model\n{first_assistant}<end_of_turn>\n")
+        for user_turn, assistant_turn in recent_history[1:]:
+            parts.append(f"<start_of_turn>user\n{user_turn}<end_of_turn>\n")
+            parts.append(f"<start_of_turn>model\n{assistant_turn}<end_of_turn>\n")
+        parts.append(f"<start_of_turn>user\n{user_message}<end_of_turn>\n")
+    else:
+        # No history — system injected into the current user turn
+        parts.append(f"<start_of_turn>user\n{system_text}\n\n{user_message}<end_of_turn>\n")
+
+    parts.append("<start_of_turn>model\n")
 
     return "".join(parts)
 
@@ -249,11 +258,11 @@ if __name__ == "__main__":
     print(f"  Prompt length (chars): {len(prompt)}")
 
     # Structural assertions
-    assert "<|system|>" in prompt,          "Missing <|system|> token"
-    assert "Paris" in prompt,               "Context not embedded"
-    assert "What continent" in prompt,      "History not included"
-    assert mock_question in prompt,         "User message missing"
-    assert prompt.endswith("<|assistant|>\n"), "Prompt must end with <|assistant|>"
+    assert "<start_of_turn>model" in prompt,        "Missing <start_of_turn>model token"
+    assert "Paris" in prompt,                       "Context not embedded"
+    assert "What continent" in prompt,              "History not included"
+    assert mock_question in prompt,                 "User message missing"
+    assert prompt.endswith("<start_of_turn>model\n"), "Prompt must end with <start_of_turn>model"
 
     print("  All structural assertions PASSED.")
 
