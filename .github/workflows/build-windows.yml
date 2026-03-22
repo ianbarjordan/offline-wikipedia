@@ -154,17 +154,10 @@ jobs:
 
         # articles.zip must contain an articles\ folder at its root,
         # e.g.:  zip -r articles.zip articles/   (from inside data/)
-        # Use Python's zipfile instead of Expand-Archive — Python's extractall()
-        # overwrites existing files silently, so stale placeholders in the zip
-        # (e.g. .gitkeep) never cause a failure.
-        python -c "
-import zipfile, pathlib
-pathlib.Path('data').mkdir(exist_ok=True)
-with zipfile.ZipFile('download-tmp/articles.zip') as zf:
-    zf.extractall('data')
-    n = sum(1 for m in zf.namelist() if not m.endswith('/'))
-    print(f'Extracted {n} files from articles.zip')
-"
+        # Use Python's zipfile instead of Expand-Archive — extractall() overwrites
+        # existing files silently, so stale placeholders in the zip (.gitkeep etc.)
+        # never cause a failure. Written as a one-liner to keep YAML valid.
+        python -c "import zipfile,pathlib; pathlib.Path('data').mkdir(exist_ok=True); zf=zipfile.ZipFile('download-tmp/articles.zip'); zf.extractall('data'); n=sum(1 for m in zf.namelist() if not m.endswith('/')); zf.close(); print(f'Extracted {n} files from articles.zip')"
 
     # ------------------------------------------------------------------
     # 6. Pre-build checklist — fail fast if any required file is missing
