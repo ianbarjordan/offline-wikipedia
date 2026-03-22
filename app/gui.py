@@ -107,18 +107,19 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
     def respond(
         message: str,
         history: list,
+        chat_pairs: list,
     ) -> Generator:
         """
         Streaming event handler.  A Gradio generator — yields on each token.
 
         Yields
         ------
-        Tuple of (cleared_input, updated_history, articles_state,
-                  src_row_update, btn0_update, …, btn{TOP_K-1}_update)
+        Tuple of (cleared_input, updated_history, chat_pairs_state,
+                  articles_state, src_row_update, btn0_update, …, btn{TOP_K-1}_update)
         """
         message = message.strip()
         if not message:
-            yield from _noop(history)
+            yield from _noop(history, chat_pairs)
             return
 
         # 1. Append user message + empty assistant placeholder immediately.
@@ -126,22 +127,24 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
             gr.ChatMessage(role="user", content=message),
             gr.ChatMessage(role="assistant", content=""),
         ]
-        yield ("", history, [], gr.update(visible=False),
+        yield ("", history, chat_pairs, [], gr.update(visible=False),
                *[gr.update(visible=False)] * _TOP_K)
 
         # 2. Retrieve + stream.
-        chat_pairs = _to_pairs(history[:-2])   # exclude the just-added pair
         stream, articles = pipeline.query(message, chat_pairs)
 
+        response_text = ""
         for token in stream:
             history[-1].content += token
-            yield ("", history, articles, gr.update(visible=False),
+            response_text += token
+            yield ("", history, chat_pairs, articles, gr.update(visible=False),
                    *[gr.update(visible=False)] * _TOP_K)
 
-        # 3. Streaming done — reveal sources.
+        # 3. Streaming done — update chat pairs + reveal sources.
+        new_chat_pairs = chat_pairs + [(message, response_text)]
         src_updates = _build_source_updates(articles)
         show_row = gr.update(visible=bool(articles))
-        yield ("", history, articles, show_row, *src_updates)
+        yield ("", history, new_chat_pairs, articles, show_row, *src_updates)
 
     def open_article(articles: list, btn_idx: int) -> None:
         """Open the local HTML file for source button *btn_idx*."""
@@ -152,7 +155,8 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
     def clear_conversation() -> tuple:
         """Reset chat and hide sources."""
         hidden = [gr.update(visible=False)] * _TOP_K
-        return [], [], gr.update(visible=False), *hidden
+        return [], [], [], gr.update(visible=False), *hidden
+        #       ^chatbot ^chat_pairs ^articles  ^src_row
 
     # -- Layout --------------------------------------------------------------
 
@@ -199,13 +203,15 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
                 for _ in range(_TOP_K)
             ]
 
+        # State: list[tuple[str, str]] chat pairs — never browser-serialized.
+        chat_pairs_state = gr.State([])
         # State: list[dict] of retrieved articles for the current response.
         articles_state = gr.State([])
 
         # -- Wire up events --------------------------------------------------
 
-        respond_inputs = [msg, chatbot]
-        respond_outputs = [msg, chatbot, articles_state, src_row, *src_buttons]
+        respond_inputs  = [msg, chatbot, chat_pairs_state]
+        respond_outputs = [msg, chatbot, chat_pairs_state, articles_state, src_row, *src_buttons]
 
         msg.submit(respond, respond_inputs, respond_outputs)
         ask_btn.click(respond, respond_inputs, respond_outputs)
@@ -213,7 +219,7 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
         clear_btn.click(
             clear_conversation,
             inputs=[],
-            outputs=[chatbot, articles_state, src_row, *src_buttons],
+            outputs=[chatbot, chat_pairs_state, articles_state, src_row, *src_buttons],
         )
 
         # Source button click → open HTML article.
@@ -267,9 +273,9 @@ def _build_source_updates(articles: list[dict]) -> list:
     return updates
 
 
-def _noop(history: list) -> Generator:
+def _noop(history: list, chat_pairs: list) -> Generator:
     """Yield a single no-op update (empty message — do nothing)."""
-    yield ("", history, [], gr.update(visible=False),
+    yield ("", history, chat_pairs, [], gr.update(visible=False),
            *[gr.update(visible=False)] * _TOP_K)
 
 

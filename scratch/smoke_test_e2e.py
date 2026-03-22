@@ -399,12 +399,12 @@ def stage_8_respond_generator(demo) -> None:
     # Drive the generator: empty history, simple question
     history = []
     question = "What is the speed of light?"
-    all_yields = list(respond_fn(question, history))
+    all_yields = list(respond_fn(question, history, []))
 
     check("respond() yields at least 3 times", len(all_yields) >= 3,
           f"yielded {len(all_yields)} times")
 
-    # Each yield is a tuple: (cleared_input, history, articles, row_update, *btn_updates)
+    # Each yield is a tuple: (cleared_input, history, chat_pairs, articles, row_update, *btn_updates)
     first_yield = all_yields[0]
     check("first yield is a tuple", isinstance(first_yield, tuple))
 
@@ -421,8 +421,8 @@ def stage_8_respond_generator(demo) -> None:
     # Last yield should have non-empty assistant content and visible sources
     last_yield     = all_yields[-1]
     last_history   = last_yield[1]
-    last_articles  = last_yield[2]
-    src_row_update = last_yield[3]
+    last_articles  = last_yield[3]   # was [2] — now articles at index 3
+    src_row_update = last_yield[4]   # was [3] — now src_row at index 4
 
     assistant_content = last_history[-1].content
     check("final assistant message non-empty", len(assistant_content) > 10,
@@ -455,9 +455,9 @@ def stage_9_clear(demo) -> None:
 
     result = clear_fn()
     check("returns a tuple", isinstance(result, tuple))
-    cleared_history = result[0]
-    cleared_articles = result[1]
-    row_update = result[2]
+    cleared_history  = result[0]   # unchanged
+    cleared_articles = result[2]   # was [1] — shifted by chat_pairs at index 1
+    row_update       = result[3]   # was [2] — shifted by chat_pairs at index 1
     check("history reset to []", cleared_history == [], str(cleared_history))
     check("articles reset to []", cleared_articles == [], str(cleared_articles))
     row_hidden = row_update.get("visible") if isinstance(row_update, dict) else getattr(row_update, "visible", None)
