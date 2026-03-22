@@ -140,7 +140,9 @@ gui.py streaming callback → Gradio Chatbot
 
 All tuneable constants live in `app/config.py`:
 - `TOP_K`, `NPROBE`, `CONFIDENCE_THRESHOLD`, `TITLE_BOOST` — retrieval
-- `MAX_DISPLAY_SOURCES = 3` — max source buttons shown per response (pipeline returns full TOP_K to LLM, GUI only shows top 3)
+- `MAX_DISPLAY_SOURCES = 3` — max source buttons shown in GUI per response
+- `MAX_LLM_CONTEXT_SOURCES = 3` — articles sliced into the LLM prompt (retrieval pool stays TOP_K)
+- `MAX_NEW_TOKENS = 300` — max tokens the LLM may generate per response (~220 words)
 - `N_THREADS`, `N_GPU_LAYERS`, `CTX_WINDOW` — LLM performance
 - `EMBED_MODEL`, `EMBEDDING_DIM`, `CHAT_HISTORY_TURNS`
 - `MODEL_PATH`, `DB_PATH`, `FAISS_PATH`, `ID_MAP_PATH`, `ARTICLES_DIR`
@@ -457,9 +459,7 @@ _Smoke test:_ 44/44 passed.
    `_build_prompt` now uses `_SYSTEM_TEMPLATE.format(grounding=..., context=...)`.
 
 2. **Display source cap (`app/pipeline.py`, `app/config.py`)** — `MAX_DISPLAY_SOURCES=3`
-   added to config. `pipeline.query()` passes full `articles` list to `_build_context()`
-   (LLM sees all TOP_K=8 articles) but trims the returned list to `[:MAX_DISPLAY_SOURCES]`
-   so the GUI only shows the 3 most relevant source buttons.
+   added to config. `pipeline.query()` trims to `[:MAX_DISPLAY_SOURCES]` for GUI source buttons.
 
 3. **Source buttons open local HTML (`app/gui.py`)** — `open_article()` now calls
    `_open_file(config.ARTICLES_DIR / f"{art['id']}.html")` instead of
@@ -476,14 +476,37 @@ _Smoke test:_ 44/44 passed.
 
 ---
 
+**Context window overflow fix (`app/config.py`, `app/pipeline.py`) — this session**
+
+_Problem:_ With `TOP_K=8` articles (~300-word leads each) + 3-turn chat history + system
+template, the input prompt consumed ~4,057 of 4,096 tokens, leaving almost no headroom for
+generation. This caused: LLM writing 5-paragraph essays (no generation cap), a
+`[{'text':…,'type':'text'}]` literal artifact at turn 3 (model confused by near-full context),
+and garbled output at turn 4+ (prompt exceeded window).
+
+_Changes:_
+- `MAX_LLM_CONTEXT_SOURCES = 3` added to `config.py` — only top 3 articles are embedded in
+  the LLM prompt. Retrieval pool stays at `TOP_K=8` for rerank quality.
+- `MAX_NEW_TOKENS = 300` added to `config.py` — caps LLM generation at ~220 words per response.
+- `pipeline.query()` now calls `_build_context(articles[:config.MAX_LLM_CONTEXT_SOURCES])`.
+- `self._llm.generate(prompt, stream=True, max_tokens=config.MAX_NEW_TOKENS)` passes the cap
+  through the existing `**kwargs` forwarding in `llm.py` — no change to `llm.py` required.
+
+_Token budget after fix:_ ~2,030 tokens input → ~2,066 tokens available for generation at any
+turn depth. With `MAX_NEW_TOKENS=300`, well within budget across 3-turn history.
+
+_Smoke test:_ 44/44 passed.
+
+---
+
 ## Current File State
 
 | File | Status | Notes |
 |------|--------|-------|
-| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3` |
+| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3`, `MAX_LLM_CONTEXT_SOURCES=3`, `MAX_NEW_TOKENS=300` |
 | `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
-| `app/pipeline.py` | Done | Three-way confidence gate; new `_SYSTEM_TEMPLATE` with `{grounding}`/`{context}` params; display source cap |
+| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS` |
 | `app/gui.py` | Done | Source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse |
 | `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads |
