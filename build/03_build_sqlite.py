@@ -75,11 +75,18 @@ _HTML_TEMPLATE = """\
       margin-bottom: 1.8em;
       border-radius: 0 6px 6px 0;
     }}
-    .body-text {{
+    .body-text p {{
       font-size: 0.97rem;
-      white-space: pre-wrap;
-      word-wrap: break-word;
       color: #333;
+      margin-bottom: 1em;
+    }}
+    .body-text h2 {{
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #222;
+      margin: 1.6em 0 0.4em;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 0.2em;
     }}
     .footer {{
       margin-top: 2.5em;
@@ -95,7 +102,7 @@ _HTML_TEMPLATE = """\
 <body>
   <h1>{title_escaped}</h1>
   <div class="lead">{lead_escaped}</div>
-  <div class="body-text">{body_escaped}</div>
+  <div class="body-text">{body_html}</div>
   <div class="footer">
     Source:&nbsp;<a href="https://simple.wikipedia.org/wiki/{slug_escaped}">
     simple.wikipedia.org/wiki/{slug_escaped}</a>
@@ -125,11 +132,39 @@ def _esc(text: str) -> str:
     )
 
 
+# Section header pattern: short line that looks like a heading
+# (≤60 chars, no trailing punctuation except colon)
+_SECTION_HEAD_RE = re.compile(r'^.{1,60}:?\s*$')
+
+
+def body_to_html(body: str) -> str:
+    """
+    Convert a body string (paragraphs separated by \\n\\n) to HTML.
+    Short single-sentence paragraphs that look like section headers
+    are wrapped in <h2>; all others in <p>.
+    """
+    if not body:
+        return ""
+    paragraphs = body.split("\n\n")
+    parts = []
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        escaped = _esc(para)
+        # Heuristic: ≤60 chars, no sentence-ending punctuation mid-string → heading
+        if len(para) <= 60 and not re.search(r'[.!?]\s', para):
+            parts.append(f"<h2>{escaped}</h2>")
+        else:
+            parts.append(f"<p>{escaped}</p>")
+    return "\n".join(parts)
+
+
 def render_html(title: str, lead: str, body: str, url_slug: str) -> str:
     return _HTML_TEMPLATE.format(
         title_escaped=_esc(title),
         lead_escaped=_esc(lead),
-        body_escaped=_esc(body),
+        body_html=body_to_html(body),
         slug_escaped=_esc(url_slug),
     )
 

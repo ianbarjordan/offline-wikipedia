@@ -68,6 +68,22 @@ def normalise_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalise_body_whitespace(text: str) -> str:
+    """
+    Collapse within-paragraph whitespace to single spaces while preserving
+    paragraph breaks (two or more consecutive newlines → double newline).
+    Used for the article body; leads are still collapsed fully.
+    """
+    # Normalise paragraph breaks first (2+ newlines → sentinel)
+    text = re.sub(r"\n{2,}", "\n\n", text)
+    # Collapse horizontal whitespace within each paragraph
+    paragraphs = text.split("\n\n")
+    paragraphs = [re.sub(r"[ \t]+", " ", p).strip() for p in paragraphs]
+    # Drop empty paragraphs
+    paragraphs = [p for p in paragraphs if p]
+    return "\n\n".join(paragraphs)
+
+
 # Patterns that identify Wikipedia maintenance/template sentences to strip.
 # These appear in opening_text when a page was created with a template that
 # left placeholder text, or when maintenance banners leaked into the lead.
@@ -214,7 +230,7 @@ def parse_dump(dump_path: Path, out_path: Path) -> dict:
                 counts["no_text"] += 1
                 continue
 
-            body = normalise_whitespace(doc.get("text") or "")
+            body = normalise_body_whitespace(doc.get("text") or "")
 
             # ---- Write staging record ----
             record = {"title": title, "lead": lead, "body": body}

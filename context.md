@@ -509,8 +509,9 @@ _Smoke test:_ 44/44 passed.
 | `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS` |
 | `app/gui.py` | Done | Source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse |
-| `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads |
-| `build/01,03,04` | Done | All other build scripts written and smoke-tested |
+| `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads; `normalise_body_whitespace()` preserves paragraph breaks in body |
+| `build/03_build_sqlite.py` | Done | `body_to_html()` renders body paragraphs as `<p>`/`<h2>` tags; CSS updated for formatted body |
+| `build/01,04` | Done | All other build scripts written and smoke-tested |
 | `wiki-offline.spec` | Done | PyInstaller onedir spec |
 
 ---
@@ -528,30 +529,53 @@ _Smoke test:_ 44/44 passed.
 
 ## Production Data State
 
-Full Simple English Wikipedia data has been built (March 2026 dump):
-- `data/wikipedia.db` — 274,704 articles, 617 MB
-- `data/wikipedia.faiss` — IVF-PQ index, ~8 MB
-- `data/id_map.json` — ~4 MB
+Full Simple English Wikipedia data rebuilt (March 2026 dump) with `clean_lead()` noise filter:
+- `data/wikipedia.db` — 274,630 articles, 616.5 MB
+- `data/wikipedia.faiss` — IVF-PQ index, 8.2 MB
+- `data/id_map.json` — 4 MB (274,630 entries)
 
-The smoke test now writes to `scratch/smoke_data/` (isolated from production):
+Rebuild completed March 22 2026. Embedded on RTX 3060 Ti (CUDA 13.1, torch 2.10.0+cu128).
+
+The smoke test writes to `scratch/smoke_data/` (isolated from production):
 - `scratch/smoke_data/smoke.db`
 - `scratch/smoke_data/smoke.faiss`
 - `scratch/smoke_data/smoke_id_map.json`
 - `scratch/smoke_data/articles/`
 
+**Smoke test result (March 22 2026): 44/44 checks passed — ALL PASSED (9.3s)**
+
+**HTML article formatting fix (March 22 2026):**
+- `build/02_parse_articles.py`: Added `normalise_body_whitespace()` — preserves `\n\n` paragraph breaks in body (leads still fully collapsed via `normalise_whitespace()`).
+- `build/03_build_sqlite.py`: Added `body_to_html()` — splits body on `\n\n`, wraps each paragraph in `<p>` or `<h2>` (heuristic: ≤60 chars, no sentence-ending punctuation). CSS updated: removed `white-space: pre-wrap`, added `.body-text p` and `.body-text h2` styles.
+- Data rebuilt: 274,630 articles. Smoke test: 44/44 passed. FAISS untouched.
+
 ---
+
+## Model Swap — Gemma 2 2B (completed March 22 2026)
+
+Replaced Phi-3 Mini with Gemma 2 2B IT (Q4_K_M):
+- `models/gemma-2-2b-q4_k_m.gguf` — 1.71 GB, downloaded from bartowski/gemma-2-2b-it-GGUF
+- `app/config.py` — `MODEL_PATH` updated
+- `app/pipeline.py` — `_build_prompt` rewritten for Gemma 2 chat template:
+  - No `<|system|>` token; system content prepended to first user turn
+  - Format: `<start_of_turn>user\n{system}\n\n{msg}<end_of_turn>\n<start_of_turn>model\n`
+  - History turns: `<start_of_turn>user\n...<end_of_turn>\n<start_of_turn>model\n...<end_of_turn>\n`
+- `wiki-offline.spec` — model filename and HF source URL updated
 
 ## Next Steps When Resuming
 
-1. **Rebuild data** (to apply `clean_lead()` noise filter):
-   - `python build/02_parse_articles.py` → `03_build_sqlite.py` → `04_embed_and_index.py`
+1. **Live LLM test** ← CURRENT PRIORITY:
+   - Run `python app/pipeline.py` to verify Gemma 2 loads and responds correctly
+   - Check response quality and token generation
 
-2. **Model swap**:
-   - Replace `phi-3-mini-q4_k_m.gguf` with `gemma-2-2b-q4_k_m.gguf`
-   - Update `config.MODEL_PATH` and `wiki-offline.spec` model filename
-   - Verify or update Phi-3 chat tokens in `_build_prompt` for Gemma 2's template
-
-3. **Windows installer build**:
+2. **Windows installer build**:
    - Complete the 4-step pre-build checklist in `wiki-offline.spec`
    - `pip install pyinstaller && pyinstaller wiki-offline.spec`
    - Ship `dist/WikiOffline/` to end users
+
+## Environment Notes
+
+- GPU: NVIDIA GeForce RTX 3060 Ti, 8GB VRAM, CUDA 13.1
+- PyTorch: 2.10.0+cu128 (installed system-wide via `--break-system-packages`)
+- llama-cpp-python: 0.3.16 (CPU build — no GPU inference for LLM)
+- Build deps: sentence-transformers 3.4.1, faiss-cpu 1.13.2, gradio 6.7.0
