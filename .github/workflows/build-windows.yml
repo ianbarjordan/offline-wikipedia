@@ -1,0 +1,232 @@
+name: Build Windows Installer
+
+# ============================================================
+# OVERVIEW
+# ============================================================
+# Produces dist/WikiOffline/ via PyInstaller on a Windows runner,
+# then uploads it as a zipped GitHub Actions artifact.
+#
+# TRIGGERS
+# --------
+#   workflow_dispatch  — manual run from the Actions tab (primary)
+#   push tag v*        — automatic on version tags (e.g. v1.0, v1.2.0)
+#
+# LARGE ASSET DEPENDENCY
+# ----------------------
+# The repo does NOT store binary data files. Before this workflow can
+# succeed, the following assets must be uploaded to a GitHub Release
+# (default tag: v1-data).  Do this ONCE from the dev machine:
+#
+#   # 1. Create the data release (if it doesn't exist yet)
+#   gh release create v1-data --title "Data assets" --notes "Large binaries not in repo."
+#
+#   # 2. Upload data files
+#   gh release upload v1-data \
+#       data/wikipedia.db \
+#       data/wikipedia.faiss \
+#       data/id_map.json
+#
+#   # 3. Zip and upload the articles HTML directory
+#   cd data && zip -r ../articles.zip articles/ && cd ..
+#   gh release upload v1-data articles.zip
+#
+#   # 4. Upload the LLM model
+#   gh release upload v1-data models/gemma-2-2b-q4_k_m.gguf
+#
+# To update data assets after a Wikipedia rebuild, re-upload the
+# changed files to the same release tag (or bump to v2-data and
+# update the default below).
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_tag:
+        description: 'Release tag containing data assets (wikipedia.db, articles.zip, .gguf, etc.)'
+        required: false
+        default: 'v1-data'
+  push:
+    tags:
+      - 'v[0-9]*'   # v1.0, v1.2.3, etc.
+
+jobs:
+  build-windows:
+    name: PyInstaller — Windows x64
+    runs-on: windows-latest
+
+    steps:
+
+    # ------------------------------------------------------------------
+    # 1. Source code
+    # ------------------------------------------------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # ------------------------------------------------------------------
+    # 2. Python runtime
+    #    Must match the Python version used during development.
+    # ------------------------------------------------------------------
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    # ------------------------------------------------------------------
+    # 3. Python dependencies
+    #    torch CPU wheel installed first and separately — the default
+    #    PyPI resolution pulls the GPU build (~2.5 GB) which is wasted
+    #    space on a CPU-only app and slows the build significantly.
+    # ------------------------------------------------------------------
+    - name: Install PyTorch (CPU-only wheel)
+      run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+    - name: Install app dependencies + PyInstaller
+      run: |
+        pip install -r app/requirements_app.txt
+        pip install pyinstaller
+
+    # ------------------------------------------------------------------
+    # 4. Embedding model cache (all-MiniLM-L6-v2, ~90 MB)
+    #    Cached by model name — only re-downloaded when the key changes.
+    #    The runtime hook (hooks/runtime_env.py) sets HF_HOME at startup
+    #    so the frozen app finds this bundle without internet access.
+    # ------------------------------------------------------------------
+    - name: Cache HuggingFace embedding model
+      uses: actions/cache@v4
+      id: hf-cache
+      with:
+        path: ~\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2
+        key: hf-embed-all-MiniLM-L6-v2-v1
+
+    - name: Pre-download embedding model (if not cached)
+      if: steps.hf-cache.outputs.cache-hit != 'true'
+      run: python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+    # ------------------------------------------------------------------
+    # 5. Large binary assets (downloaded from GitHub Release)
+    #    See the LARGE ASSET DEPENDENCY section at the top for how to
+    #    create and populate the v1-data release.
+    #
+    #    Expected release assets:
+    #      wikipedia.db              — SQLite article store  (~620 MB)
+    #      wikipedia.faiss           — FAISS IVF-PQ index    (~8 MB)
+    #      id_map.json               — FAISS pos → SQLite id (~4 MB)
+    #      articles.zip              — {id}.html per article (~200 MB zipped)
+    #      gemma-2-2b-q4_k_m.gguf   — Gemma 2 2B Q4_K_M    (~1.7 GB)
+    # ------------------------------------------------------------------
+    - name: Resolve data release tag
+      id: tag
+      shell: pwsh
+      run: |
+        # Prefer the manual input; fall back to default for tag-push triggers.
+        $t = if ("${{ github.event.inputs.data_tag }}" -ne "") {
+               "${{ github.event.inputs.data_tag }}"
+             } else { "v1-data" }
+        echo "data_tag=$t" >> $env:GITHUB_OUTPUT
+        Write-Host "Using data release tag: $t"
+
+    - name: Download data assets from GitHub Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: pwsh
+      run: |
+        $tag = "${{ steps.tag.outputs.data_tag }}"
+        New-Item -ItemType Directory -Force -Path download-tmp | Out-Null
+        gh release download $tag `
+          --pattern "wikipedia.db" `
+          --pattern "wikipedia.faiss" `
+          --pattern "id_map.json" `
+          --pattern "articles.zip" `
+          --pattern "gemma-2-2b-q4_k_m.gguf" `
+          --dir download-tmp `
+          --repo ${{ github.repository }}
+
+    - name: Place data files
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path data   | Out-Null
+        New-Item -ItemType Directory -Force -Path models | Out-Null
+
+        Move-Item download-tmp\wikipedia.db            data\wikipedia.db
+        Move-Item download-tmp\wikipedia.faiss         data\wikipedia.faiss
+        Move-Item download-tmp\id_map.json             data\id_map.json
+        Move-Item download-tmp\gemma-2-2b-q4_k_m.gguf models\gemma-2-2b-q4_k_m.gguf
+
+        # articles.zip must contain an articles\ folder at its root,
+        # e.g.:  zip -r articles.zip articles/   (from inside data/)
+        Expand-Archive -Path download-tmp\articles.zip -DestinationPath data\
+        Write-Host "Articles extracted: $((Get-ChildItem data\articles -File).Count) files"
+
+    # ------------------------------------------------------------------
+    # 6. Pre-build checklist — fail fast if any required file is missing
+    # ------------------------------------------------------------------
+    - name: Verify required files
+      shell: pwsh
+      run: |
+        $required = @(
+          "data\wikipedia.db",
+          "data\wikipedia.faiss",
+          "data\id_map.json",
+          "data\articles",
+          "models\gemma-2-2b-q4_k_m.gguf"
+        )
+        $missing = $required | Where-Object { -not (Test-Path $_) }
+        if ($missing) {
+          Write-Error "Missing required files:`n$($missing -join "`n")"
+          exit 1
+        }
+        Write-Host "All required files present — proceeding with build."
+
+    # ------------------------------------------------------------------
+    # 7. PyInstaller build
+    #    wiki-offline.spec handles all path discovery and datas wiring.
+    #    The spec emits warnings (not errors) for any missing files, but
+    #    step 6 above ensures they are all present before we get here.
+    # ------------------------------------------------------------------
+    - name: Build with PyInstaller
+      run: pyinstaller wiki-offline.spec
+
+    # ------------------------------------------------------------------
+    # 8. Package and upload
+    #    Compress-Archive so the artifact is a single downloadable file.
+    #    Users unzip and run WikiOffline\WikiOffline.exe — no installer
+    #    wizard required (portable app).
+    #
+    #    Future enhancement: wrap in an NSIS / Inno Setup installer so
+    #    users get a double-clickable Setup.exe, Start Menu shortcut, and
+    #    Add/Remove Programs entry.  The PyInstaller output is the input
+    #    to that step.
+    # ------------------------------------------------------------------
+    - name: Zip installer output
+      shell: pwsh
+      run: |
+        Compress-Archive -Path dist\WikiOffline\* -DestinationPath WikiOffline-windows.zip
+        $mb = [math]::Round((Get-Item WikiOffline-windows.zip).Length / 1MB, 1)
+        Write-Host "WikiOffline-windows.zip — $mb MB"
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WikiOffline-windows-${{ github.sha }}
+        path: WikiOffline-windows.zip
+        retention-days: 30
+
+    # ------------------------------------------------------------------
+    # 9. Attach installer to GitHub Release (tag-push builds only)
+    #    When this workflow runs because a v* tag was pushed, the zipped
+    #    installer is uploaded to that release so it appears on the
+    #    Releases page for download.
+    # ------------------------------------------------------------------
+    - name: Attach installer to GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: pwsh
+      run: |
+        $tag = "${{ github.ref_name }}"
+        # Create the release if it doesn't already exist (idempotent).
+        gh release create $tag --title "WikiOffline $tag" --notes "Windows installer." `
+          --repo ${{ github.repository }} 2>$null; $true
+        gh release upload $tag WikiOffline-windows.zip `
+          --repo ${{ github.repository }} --clobber
+        Write-Host "Uploaded WikiOffline-windows.zip to release $tag"
