@@ -60,3 +60,7 @@ FAISS_PATH: Path = PROJECT_ROOT / "data" / "wikipedia.faiss"
 ID_MAP_PATH: Path = PROJECT_ROOT / "data" / "id_map.json"
 ARTICLES_DIR: Path = PROJECT_ROOT / "data" / "articles"
 MAX_DISPLAY_SOURCES: int = 3   # Max source buttons shown per response
+MAX_LLM_CONTEXT_SOURCES: int = 3  # Articles included in the LLM prompt
+                                   # (retrieval pool stays TOP_K for rerank quality)
+MAX_NEW_TOKENS: int = 300  # Max tokens the LLM may generate per response
+                           # ~220 words — enough for a thorough paragraph

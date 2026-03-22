@@ -127,9 +127,9 @@ class Pipeline:
         if low_confidence and not articles:
             return _const_generator(_LOW_CONFIDENCE_REPLY), []
 
-        context = _build_context(articles)
+        context = _build_context(articles[:config.MAX_LLM_CONTEXT_SOURCES])
         prompt = _build_prompt(user_message, chat_history, context, low_confidence=low_confidence)
-        stream = self._llm.generate(prompt, stream=True)
+        stream = self._llm.generate(prompt, stream=True, max_tokens=config.MAX_NEW_TOKENS)
 
         display = articles[:config.MAX_DISPLAY_SOURCES]
 
