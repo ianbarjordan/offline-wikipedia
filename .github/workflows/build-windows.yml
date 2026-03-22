@@ -154,9 +154,6 @@ jobs:
 
         # articles.zip must contain an articles\ folder at its root,
         # e.g.:  zip -r articles.zip articles/   (from inside data/)
-        # Remove the repo placeholder dir first; Expand-Archive errors if any
-        # destination file already exists, even with -Force on some PS7 builds.
-        Remove-Item -Path data\articles -Recurse -Force -ErrorAction SilentlyContinue
         Expand-Archive -Path download-tmp\articles.zip -DestinationPath data\
         Write-Host "Articles extracted: $((Get-ChildItem data\articles -File).Count) files"
 
