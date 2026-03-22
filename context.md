@@ -507,7 +507,7 @@ _Smoke test:_ 44/44 passed.
 | `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
 | `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS` |
-| `app/gui.py` | Done | Source buttons open local `data/articles/{id}.html` via `_open_file()` |
+| `app/gui.py` | Done | `chat_pairs_state` (gr.State) prevents browser serialization of history; source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse |
 | `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads; `normalise_body_whitespace()` preserves paragraph breaks in body |
 | `build/03_build_sqlite.py` | Done | `body_to_html()` renders body paragraphs as `<p>`/`<h2>` tags; CSS updated for formatted body |
@@ -522,8 +522,7 @@ _Smoke test:_ 44/44 passed.
   For CI/test environments, install `llama-cpp-python` even when no GGUF is available.
 - **`embeddings.position_ids UNEXPECTED`** warning at Retriever load — benign,
   expected for `all-MiniLM-L6-v2` with sentence-transformers 5.x.
-- **Model swap still pending**: `phi-3-mini-q4_k_m.gguf` should be replaced with
-  `gemma-2-2b-q4_k_m.gguf`.
+- None outstanding.
 
 ---
 
@@ -551,6 +550,33 @@ The smoke test writes to `scratch/smoke_data/` (isolated from production):
 
 ---
 
+## Chat History Format Fix — gr.State for chat pairs (March 22 2026)
+
+_Problem:_ Starting at turn 3, LLM responses appeared as `[{'text': "...", 'type': 'text'}]`
+instead of plain text. By turn 6 this double-nested. Root cause: Gradio 6.7 serializes
+`ChatMessage.content` through the browser as a list of content blocks. `_to_pairs()` in
+`gui.py` extracted this list as-is; `_build_prompt()` formatted it via f-string, producing
+the literal dict repr. Gemma 2 saw this in context and mimicked the format — a feedback loop.
+
+_Fix (`app/gui.py`):_
+- Added `chat_pairs_state = gr.State([])` — lives server-side only, never round-trips
+  through the browser, so content always remains a plain Python string.
+- `respond()` now accepts `chat_pairs: list` as 3rd parameter and uses it directly
+  (no `_to_pairs()` call). Accumulates `response_text` during streaming; appends
+  `(message, response_text)` to produce `new_chat_pairs` after the stream ends.
+- All yield tuples, `_noop()`, `clear_conversation()`, and event wiring updated to
+  include `chat_pairs_state`.
+- `_to_pairs()` kept (used in `gui.py` smoke test).
+
+_Fix (`scratch/smoke_test_e2e.py`):_
+- Stage 8: call updated to `respond_fn(question, history, [])`, index refs shifted
+  (`articles` at `[3]`, `src_row` at `[4]`).
+- Stage 9: `cleared_articles` at `[2]`, `row_update` at `[3]`.
+
+_Verification:_ 44/44 smoke tests passed. 6-turn live conversation confirmed zero artifacts.
+
+---
+
 ## Model Swap — Gemma 2 2B (completed March 22 2026)
 
 Replaced Phi-3 Mini with Gemma 2 2B IT (Q4_K_M):
@@ -564,11 +590,7 @@ Replaced Phi-3 Mini with Gemma 2 2B IT (Q4_K_M):
 
 ## Next Steps When Resuming
 
-1. **Live LLM test** ← CURRENT PRIORITY:
-   - Run `python app/pipeline.py` to verify Gemma 2 loads and responds correctly
-   - Check response quality and token generation
-
-2. **Windows installer build**:
+1. **Windows installer build**:
    - Complete the 4-step pre-build checklist in `wiki-offline.spec`
    - `pip install pyinstaller && pyinstaller wiki-offline.spec`
    - Ship `dist/WikiOffline/` to end users
