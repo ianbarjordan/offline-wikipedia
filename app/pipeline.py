@@ -142,14 +142,46 @@ _AUGMENT_STOPWORDS = {
     "in", "on", "at", "to", "of", "for", "with", "about",
 }
 
+# Fix C — Short-message reaction catch-all sets.
+_QUESTION_WORDS = frozenset({
+    "what", "where", "who", "when", "how", "why", "which",
+})
+
+
+def _is_conversational_reaction(message: str) -> bool:
+    """
+    Return True for short reactions/affirmations that aren't valid Wikipedia queries.
+    Triggers when: ≤5 words, no proper noun after the first word, no question word.
+    """
+    words = message.strip().rstrip("?!.,").split()
+    if len(words) > 5:
+        return False
+    # A question word signals a real query.
+    if any(w.lower() in _QUESTION_WORDS for w in words):
+        return False
+    # A capitalized content word after position 0 signals a named entity → real query.
+    content_words = words[1:]
+    if any(w[0].isupper() for w in content_words if w.isalpha()):
+        return False
+    return True
+
 
 def _augment_query(user_message: str, chat_history: list[tuple[str, str]]) -> str:
     """
-    If the query is short and contains pronouns, prepend key words from the
-    previous user turn to help the retriever find the right articles.
+    Augment the retrieval query with context from the previous user turn when:
+      (a) the query contains a pronoun (existing logic), OR
+      (b) the query is short (≤6 words) and has no proper noun — entity-less follow-up.
+    Word cap raised from 8 → 12 to cover longer pronoun-containing follow-ups. (Fix D)
     """
     words = user_message.split()
-    if len(words) > 8 or not _PRONOUN_RE.search(user_message):
+    has_pronoun = bool(_PRONOUN_RE.search(user_message))
+
+    # Short query with no proper noun after position 0 = entity-less follow-up.
+    content_words = words[1:]
+    has_proper_noun = any(w[0].isupper() for w in content_words if w.isalpha())
+    is_entity_less = len(words) <= 6 and not has_proper_noun
+
+    if len(words) > 12 or not (has_pronoun or is_entity_less):
         return user_message
     if not chat_history:
         return user_message
@@ -219,6 +251,10 @@ class Pipeline:
 
         # Short-circuit conversational inputs — no retrieval, no LLM call.
         if _CONVERSATIONAL_RE.match(user_message):
+            return _const_generator(_GREETING_REPLY), []
+
+        # Fix C — Catch short reactions the regex misses (e.g. "Only 77k?!", "Okay, cool").
+        if _is_conversational_reaction(user_message):
             return _const_generator(_GREETING_REPLY), []
 
         # Fix 4/5 — Augment pronoun-heavy follow-up queries with prior context.

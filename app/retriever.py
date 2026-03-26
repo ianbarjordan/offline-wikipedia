@@ -40,8 +40,15 @@ import config
 # ---------------------------------------------------------------------------
 
 _STOPWORDS = frozenset({
+    # core function words
     "a", "an", "the", "is", "are", "of", "in", "to", "and", "or",
     "what", "how", "why", "who", "when", "where", "was", "were",
+    # preamble verbs and filler words (Fix A)
+    "tell", "about", "know", "want", "explain", "describe", "show",
+    "give", "find", "need", "like", "make", "use", "say", "let",
+    "please", "can", "could", "would", "get", "look", "also",
+    "have", "has", "had", "do", "did", "does", "be", "been",
+    "more", "some", "just", "really", "very", "think", "see",
 })
 
 _WORD_RE = re.compile(r'\b\w+\b')
@@ -199,8 +206,16 @@ class Retriever:
             return []
 
         # Fix 7 — Expand state abbreviations before embedding.
+        # Only expand tokens that are all-uppercase (genuine abbreviations like "AK",
+        # "ME") to avoid corrupting common lowercase words like "me", "in", "or",
+        # "de" that happen to share a spelling with a state abbreviation.
         tokens = query.strip().split()
-        tokens = [_STATE_ABBREVS.get(t.lower().rstrip("?.!"), t) for t in tokens]
+        tokens = [
+            _STATE_ABBREVS.get(t.lower().rstrip("?.!"), t)
+            if t.rstrip("?.!").isupper() and len(t.rstrip("?.!")) == 2
+            else t
+            for t in tokens
+        ]
         query = " ".join(tokens)
 
         # 1. Embed — shape (1, EMBEDDING_DIM), float32
@@ -269,7 +284,7 @@ class Retriever:
         ]
         # Fix 6 — Expand nicknames so "tom" searches for "thomas".
         q_ordered = [_NICKNAMES.get(w, w) for w in q_ordered]
-        if q_ordered and len(q_ordered) <= 4:
+        if q_ordered and len(q_ordered) <= 6:  # Fix B: raised from 4 → 6
             existing_ids = {a["id"] for a in articles}
             candidate_title = " ".join(q_ordered)
 
