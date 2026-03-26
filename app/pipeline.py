@@ -45,6 +45,7 @@ Design notes
 
 from __future__ import annotations
 
+import re
 from typing import Generator
 
 import config
@@ -56,22 +57,34 @@ from retriever import Retriever
 # ---------------------------------------------------------------------------
 
 _SYSTEM_TEMPLATE = """\
-You are a helpful Wikipedia assistant. {grounding}
+You are a Wikipedia assistant. {grounding}
 
-Format your answers clearly:
-- Use plain prose. Do NOT use markdown headers or bullet points unless listing 3+ distinct items.
+Rules:
+- Answer using ONLY the Wikipedia articles provided below — not your training knowledge.
+- If the articles do not contain the answer, say exactly: "My Wikipedia database doesn't cover that topic."
+- Use plain prose. No markdown headers or bullet points unless listing 3+ distinct items.
 - Keep answers concise: 2–4 sentences for simple facts, one short paragraph for explanations.
-- If the context gives a date, number, or name, quote it exactly.
-- Do not repeat the question back to the user.
-- Do not say "According to Wikipedia" or "The context says" — just answer directly.
+- Do not repeat the question. Do not say "According to Wikipedia" or "The context says".
 
 Wikipedia context:
 {context}"""
 
 _LOW_CONFIDENCE_REPLY = (
-    "I couldn't find reliable information on that in Wikipedia. "
-    "The search didn't return closely related articles — try rephrasing "
-    "or asking about a more specific topic."
+    "I couldn't find reliable information on that in my Wikipedia database. "
+    "Try rephrasing or asking about a more specific topic."
+)
+
+_GREETING_REPLY = (
+    "I'm a Wikipedia assistant. Ask me anything — I'll look it up in "
+    "Simple English Wikipedia and answer based on what the articles say."
+)
+
+# Matches greetings and meta-questions that shouldn't trigger article retrieval.
+_CONVERSATIONAL_RE = re.compile(
+    r"^\s*(hi+|hello+|hey+|howdy|greetings|good\s+(morning|afternoon|evening)|"
+    r"what\s+(can|do|are|will)\s+you|who\s+are\s+you|what\s+is\s+this|"
+    r"help(\s+me)?|thanks?(\s+you)?|thank\s+you|ok(ay)?|sure|cool|great)\W*$",
+    re.IGNORECASE,
 )
 
 
@@ -121,6 +134,10 @@ class Pipeline:
                    ordered by FAISS similarity.  May be empty if retrieval
                    found nothing.
         """
+        # Short-circuit conversational inputs — no retrieval, no LLM call.
+        if _CONVERSATIONAL_RE.match(user_message):
+            return _const_generator(_GREETING_REPLY), []
+
         articles = self._retriever.search(user_message)
 
         low_confidence = (not articles) or (articles[0]["score"] < config.CONFIDENCE_THRESHOLD)
@@ -148,12 +165,18 @@ class Pipeline:
 # ---------------------------------------------------------------------------
 
 _GROUNDING_HIGH = (
-    "Answer exclusively from the context below — do not use your training knowledge."
+    "You MUST use ONLY the Wikipedia articles below to answer. "
+    "Do NOT use your training knowledge — not even for famous people, "
+    "current events, or well-known facts. "
+    "If the articles do not contain the answer, say: "
+    "'My Wikipedia database doesn't cover that topic.'"
 )
 
 _GROUNDING_LOW = (
-    "Answer using the context below as your primary source; "
-    "if it is insufficient, acknowledge that briefly."
+    "The Wikipedia articles below are a weak match for this question. "
+    "Answer strictly from what the articles say. "
+    "If they don't contain the answer, say: "
+    "'My Wikipedia database doesn't cover that topic.'"
 )
 
 
@@ -195,19 +218,14 @@ def _build_prompt(
     recent_history = chat_history[-config.CHAT_HISTORY_TURNS :]
     parts: list[str] = []
 
-    if recent_history:
-        # System injected into the first historical user turn
-        first_user, first_assistant = recent_history[0]
-        parts.append(f"<start_of_turn>user\n{system_text}\n\n{first_user}<end_of_turn>\n")
-        parts.append(f"<start_of_turn>model\n{first_assistant}<end_of_turn>\n")
-        for user_turn, assistant_turn in recent_history[1:]:
-            parts.append(f"<start_of_turn>user\n{user_turn}<end_of_turn>\n")
-            parts.append(f"<start_of_turn>model\n{assistant_turn}<end_of_turn>\n")
-        parts.append(f"<start_of_turn>user\n{user_message}<end_of_turn>\n")
-    else:
-        # No history — system injected into the current user turn
-        parts.append(f"<start_of_turn>user\n{system_text}\n\n{user_message}<end_of_turn>\n")
+    # Historical turns — no system text (keeps prompt compact).
+    for user_turn, assistant_turn in recent_history:
+        parts.append(f"<start_of_turn>user\n{user_turn}<end_of_turn>\n")
+        parts.append(f"<start_of_turn>model\n{assistant_turn}<end_of_turn>\n")
 
+    # System + fresh context always injected into the CURRENT user turn so the
+    # model sees the relevant Wikipedia articles immediately before generating.
+    parts.append(f"<start_of_turn>user\n{system_text}\n\n{user_message}<end_of_turn>\n")
     parts.append("<start_of_turn>model\n")
 
     return "".join(parts)
