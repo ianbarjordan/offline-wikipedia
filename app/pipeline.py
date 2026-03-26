@@ -65,6 +65,8 @@ Rules:
 - Use plain prose. No markdown headers or bullet points unless listing 3+ distinct items.
 - Keep answers concise: 2–4 sentences for simple facts, one short paragraph for explanations.
 - Do not repeat the question. Do not say "According to Wikipedia" or "The context says".
+- Do not add details about fictional characters, movies, TV shows, or celebrities
+  that are not explicitly stated in the Wikipedia articles below.
 
 Wikipedia context:
 {context}"""
@@ -79,13 +81,86 @@ _GREETING_REPLY = (
     "Simple English Wikipedia and answer based on what the articles say."
 )
 
-# Matches greetings and meta-questions that shouldn't trigger article retrieval.
-_CONVERSATIONAL_RE = re.compile(
-    r"^\s*(hi+|hello+|hey+|howdy|greetings|good\s+(morning|afternoon|evening)|"
-    r"what\s+(can|do|are|will)\s+you|who\s+are\s+you|what\s+is\s+this|"
-    r"help(\s+me)?|thanks?(\s+you)?|thank\s+you|ok(ay)?|sure|cool|great)\W*$",
+_META_REPLY = (
+    "I'm a Wikipedia assistant running locally on your machine. "
+    "I was built to answer questions using Simple English Wikipedia articles. "
+    "Ask me about any topic and I'll search my database."
+)
+
+_INJECTION_REPLY = (
+    "I can only answer questions using my Wikipedia database. "
+    "I'm not able to follow instructions that ask me to change how I work."
+)
+
+# Fix 1 — Prompt injection detection. Checked before all other handlers.
+_INJECTION_RE = re.compile(
+    r"(ignore|disregard|forget|override|bypass|cancel|reset)\s+"
+    r"(your\s+)?(previous|prior|above|all|the|my|any)?\s*"
+    r"(instruction|prompt|rule|constraint|guideline|system|context|order)s?"
+    r"|you\s+are\s+now\s+|act\s+as\s+|pretend\s+(to\s+be\s+|you\s+are\s+)"
+    r"|roleplay\s+as|jailbreak|DAN\b",
     re.IGNORECASE,
 )
+
+# Fix 3 — Identity/meta questions (subset of conversational, gets its own reply).
+_META_RE = re.compile(
+    r"where\s+are\s+you\s+from|who\s+(made|built|created)\s+you|"
+    r"are\s+you\s+(an?\s+)?(ai|robot|human|bot)|who\s+are\s+you",
+    re.IGNORECASE,
+)
+
+# Fix 3 — Expanded conversational handler covering reactions, exclamations, meta.
+_CONVERSATIONAL_RE = re.compile(
+    r"^\s*("
+    # Greetings
+    r"hi+|hello+|hey+|howdy|greetings|good\s+(morning|afternoon|evening|day)|"
+    # Reactions / exclamations
+    r"sweet[!.]?|cool[!.]?|wow[!.]?|nice[!.]?|great[!.]?|awesome[!.]?|"
+    r"interesting[!.]?|amazing[!.]?|lol[!.]?|haha+|lmao|spoiler[!.]?|"
+    r"really\??|are\s+you\s+sure\??|ok(ay)?[!.]?|sure[!.]?|"
+    r"thanks?(\s+you)?[!.]?|thank\s+you[!.]?|"
+    # Meta / identity questions about the assistant
+    r"what\s+(can|do|are|will)\s+you|who\s+are\s+you|what\s+is\s+this|"
+    r"where\s+are\s+you\s+from|who\s+(made|built|created)\s+you|"
+    r"are\s+you\s+(an?\s+)?(ai|robot|human|bot)|"
+    r"help(\s+me)?"
+    r")\W*$",
+    re.IGNORECASE,
+)
+
+# Fix 4/5 — Pronoun-based follow-up detection for query augmentation.
+_PRONOUN_RE = re.compile(
+    r"\b(he|she|it|they|his|her|its|their|him|them|this|that|these|those)\b",
+    re.IGNORECASE,
+)
+
+_AUGMENT_STOPWORDS = {
+    "the", "a", "an", "is", "was", "are", "were", "be", "been",
+    "do", "did", "does", "have", "has", "had", "will", "would",
+    "can", "could", "should", "may", "might", "what", "where",
+    "when", "why", "how", "who", "which", "and", "or", "but",
+    "in", "on", "at", "to", "of", "for", "with", "about",
+}
+
+
+def _augment_query(user_message: str, chat_history: list[tuple[str, str]]) -> str:
+    """
+    If the query is short and contains pronouns, prepend key words from the
+    previous user turn to help the retriever find the right articles.
+    """
+    words = user_message.split()
+    if len(words) > 8 or not _PRONOUN_RE.search(user_message):
+        return user_message
+    if not chat_history:
+        return user_message
+    prev_user = chat_history[-1][0]
+    key_words = [
+        w.strip(".,?!") for w in prev_user.split()
+        if w.lower().strip(".,?!") not in _AUGMENT_STOPWORDS and len(w) > 2
+    ][:4]
+    if not key_words:
+        return user_message
+    return " ".join(key_words) + " " + user_message
 
 
 def _const_generator(text: str) -> Generator[str, None, None]:
@@ -134,11 +209,21 @@ class Pipeline:
                    ordered by FAISS similarity.  May be empty if retrieval
                    found nothing.
         """
+        # Fix 1 — Block prompt injection before any other handler.
+        if _INJECTION_RE.search(user_message):
+            return _const_generator(_INJECTION_REPLY), []
+
+        # Fix 3 — Identity questions get a dedicated reply.
+        if _META_RE.search(user_message):
+            return _const_generator(_META_REPLY), []
+
         # Short-circuit conversational inputs — no retrieval, no LLM call.
         if _CONVERSATIONAL_RE.match(user_message):
             return _const_generator(_GREETING_REPLY), []
 
-        articles = self._retriever.search(user_message)
+        # Fix 4/5 — Augment pronoun-heavy follow-up queries with prior context.
+        retrieval_query = _augment_query(user_message, chat_history)
+        articles = self._retriever.search(retrieval_query)
 
         low_confidence = (not articles) or (articles[0]["score"] < config.CONFIDENCE_THRESHOLD)
 
@@ -146,6 +231,7 @@ class Pipeline:
             return _const_generator(_LOW_CONFIDENCE_REPLY), []
 
         context = _build_context(articles[:config.MAX_LLM_CONTEXT_SOURCES])
+        # Always pass original user_message (not augmented) to the LLM.
         prompt = _build_prompt(user_message, chat_history, context, low_confidence=low_confidence)
         stream = self._llm.generate(prompt, stream=True, max_tokens=config.MAX_NEW_TOKENS)
 
@@ -167,7 +253,8 @@ class Pipeline:
 _GROUNDING_HIGH = (
     "You MUST use ONLY the Wikipedia articles below to answer. "
     "Do NOT use your training knowledge — not even for famous people, "
-    "current events, or well-known facts. "
+    "fictional characters, current events, or well-known facts. "
+    "Copy facts directly from the articles. Do not infer or extrapolate. "
     "If the articles do not contain the answer, say: "
     "'My Wikipedia database doesn't cover that topic.'"
 )

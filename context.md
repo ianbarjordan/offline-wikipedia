@@ -504,9 +504,9 @@ _Smoke test:_ 44/44 passed.
 | File | Status | Notes |
 |------|--------|-------|
 | `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3`, `MAX_LLM_CONTEXT_SOURCES=3`, `MAX_NEW_TOKENS=300` |
-| `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter |
+| `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter; nickname expansion (`_NICKNAMES`); state abbreviation expansion (`_STATE_ABBREVS`) |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
-| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; greeting handler; strengthened grounding; context always injected into current turn |
+| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; injection detection (`_INJECTION_RE`); meta-reply handler (`_META_RE`/`_META_REPLY`); expanded conversational handler; query augmentation (`_augment_query`); stronger grounding (fictional characters); context always injected into current turn |
 | `app/gui.py` | Done | `chat_pairs_state` (gr.State) prevents browser serialization of history; source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse; `--gpu-layers N` flag for dev GPU testing |
 | `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads; `normalise_body_whitespace()` preserves paragraph breaks in body |
@@ -625,6 +625,49 @@ changing `config.py`. `dist/WikiOffline.exe` always defaults to CPU (`N_GPU_LAYE
 
 ---
 
+## Conversation Quality Fixes — 7 Issues (March 26 2026)
+
+Live testing revealed 7 failure modes. All fixes are in `app/pipeline.py` and
+`app/retriever.py` only. Smoke test: **44/44 passed** after all changes.
+
+**Fix 1 — Prompt Injection Detection (`app/pipeline.py`)**
+Added `_INJECTION_RE` (compiled regex) that catches "ignore your previous instructions",
+"act as", "pretend to be", "jailbreak", `DAN`, etc. Checked via `.search()` before any
+other handler — returns `_INJECTION_REPLY` with no retrieval, no LLM call.
+
+**Fix 2 — Stronger Grounding (`app/pipeline.py`)**
+- `_SYSTEM_TEMPLATE` gains an explicit rule: "Do not add details about fictional
+  characters, movies, TV shows, or celebrities not stated in the Wikipedia articles."
+- `_GROUNDING_HIGH` extended: adds "fictional characters" to the prohibited sources list
+  and "Copy facts directly from the articles. Do not infer or extrapolate."
+
+**Fix 3 — Expanded Conversational Handler (`app/pipeline.py`)**
+- `_CONVERSATIONAL_RE` broadened to cover reactions (`Sweet!`, `Wow!`, `Interesting!`,
+  `Lol`, `Nice!`, `Amazing!`), affirmatives (`Really?`, `Are you sure?`), and identity
+  questions (`Where are you from?`, `Who made you?`, `Are you an AI?`).
+- `_META_RE` + `_META_REPLY` added: identity questions return a dedicated reply explaining
+  the app is a local Wikipedia assistant — checked before `_CONVERSATIONAL_RE`.
+- Handler order in `query()`: injection → meta → conversational → retrieval.
+
+**Fix 4 & 5 — Query Augmentation for Follow-ups (`app/pipeline.py`)**
+Added `_augment_query(user_message, chat_history)`: if the query is ≤ 8 words AND
+contains a pronoun (`he`, `it`, `they`, `this`, etc.), up to 4 key words from the
+previous user turn are prepended to form `retrieval_query`. The LLM always receives
+the original `user_message`. Resolves "Why did he do that?" (after Jefferson) and
+"Is it also a state?" (after Virginia).
+
+**Fix 6 — Nickname Expansion (`app/retriever.py`)**
+Added `_NICKNAMES` dict (`tom→thomas`, `bob→robert`, `bill→william`, etc.).
+Applied to `q_ordered` in the SQL title supplement before building the candidate title,
+so "tom jefferson" finds the "Thomas Jefferson" article.
+
+**Fix 7 — State Abbreviation Expansion (`app/retriever.py`)**
+Added `_STATE_ABBREVS` dict (all 50 states + DC). Applied to query tokens at the top
+of `search()` before embedding, so "Where is va?" expands to "Where is Virginia?" and
+retrieves the state article rather than a small Illinois city.
+
+---
+
 ## Windows Build — Option A (Native)
 
 PyInstaller runs on the Windows host (not WSL). Steps after `git pull`:
@@ -645,7 +688,7 @@ Data release `v1-data` on GitHub holds all large assets for re-download.
 
 ## Next Steps When Resuming
 
-1. **Retest live conversation** after grounding fixes (`git pull` on Windows, rerun)
+1. **Live retest** after conversation quality fixes (injection, follow-ups, abbreviations, nicknames)
 2. **NSIS/Inno Setup installer**: wrap `dist\WikiOffline\` in a Setup.exe with Start
    Menu shortcut and Add/Remove Programs entry
 3. **Revisit GitHub Actions build** (Option B) if native build proves inconvenient

@@ -46,6 +46,31 @@ _STOPWORDS = frozenset({
 
 _WORD_RE = re.compile(r'\b\w+\b')
 
+# Fix 6 — Common nickname → canonical first name expansions.
+_NICKNAMES: dict[str, str] = {
+    "tom": "thomas", "bob": "robert", "bill": "william", "jim": "james",
+    "joe": "joseph", "mike": "michael", "dave": "david", "dick": "richard",
+    "jack": "john", "meg": "margaret", "maggie": "margaret", "kate": "katherine",
+    "liz": "elizabeth", "beth": "elizabeth",
+}
+
+# Fix 7 — US state abbreviation expansion (2-letter token → full state name).
+_STATE_ABBREVS: dict[str, str] = {
+    "al": "Alabama", "ak": "Alaska", "az": "Arizona", "ar": "Arkansas",
+    "ca": "California", "co": "Colorado", "ct": "Connecticut", "de": "Delaware",
+    "fl": "Florida", "ga": "Georgia", "hi": "Hawaii", "id": "Idaho",
+    "il": "Illinois", "in": "Indiana", "ia": "Iowa", "ks": "Kansas",
+    "ky": "Kentucky", "la": "Louisiana", "me": "Maine", "md": "Maryland",
+    "ma": "Massachusetts", "mi": "Michigan", "mn": "Minnesota", "ms": "Mississippi",
+    "mo": "Missouri", "mt": "Montana", "ne": "Nebraska", "nv": "Nevada",
+    "nh": "New Hampshire", "nj": "New Jersey", "nm": "New Mexico", "ny": "New York",
+    "nc": "North Carolina", "nd": "North Dakota", "oh": "Ohio", "ok": "Oklahoma",
+    "or": "Oregon", "pa": "Pennsylvania", "ri": "Rhode Island", "sc": "South Carolina",
+    "sd": "South Dakota", "tn": "Tennessee", "tx": "Texas", "ut": "Utah",
+    "vt": "Vermont", "va": "Virginia", "wa": "Washington", "wv": "West Virginia",
+    "wi": "Wisconsin", "wy": "Wyoming", "dc": "District of Columbia",
+}
+
 _TITLE_EXACT_SCORE    = 0.9  # Synthetic score assigned to SQL-injected exact-title
                               # matches; high enough to beat FAISS place articles
                               # after title reranking, while staying in [0, 1].
@@ -173,6 +198,11 @@ class Retriever:
         if not query or not query.strip():
             return []
 
+        # Fix 7 — Expand state abbreviations before embedding.
+        tokens = query.strip().split()
+        tokens = [_STATE_ABBREVS.get(t.lower().rstrip("?.!"), t) for t in tokens]
+        query = " ".join(tokens)
+
         # 1. Embed — shape (1, EMBEDDING_DIM), float32
         vec: np.ndarray = self._model.encode(
             [query.strip()],
@@ -237,6 +267,8 @@ class Retriever:
             w for w in _WORD_RE.findall(query.lower())
             if w not in _STOPWORDS and len(w) > 2
         ]
+        # Fix 6 — Expand nicknames so "tom" searches for "thomas".
+        q_ordered = [_NICKNAMES.get(w, w) for w in q_ordered]
         if q_ordered and len(q_ordered) <= 4:
             existing_ids = {a["id"] for a in articles}
             candidate_title = " ".join(q_ordered)
