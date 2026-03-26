@@ -78,6 +78,17 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not open a browser tab automatically on startup.",
     )
+    parser.add_argument(
+        "--gpu-layers",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Number of LLM layers to offload to GPU (default: from config, "
+            "currently %(default)s). Set to a positive integer to use your GPU "
+            "during development; the shipped app always defaults to 0 (CPU-only)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -96,7 +107,7 @@ def _check_required_files() -> bool:
         (config.ID_MAP_PATH,  "id_map",         "Run build/04_embed_and_index.py"),
         (config.DB_PATH,      "SQLite database","Run build/03_build_sqlite.py"),
         (config.MODEL_PATH,   "LLM model",
-         "Download phi-3-mini-q4_k_m.gguf from HuggingFace → models/"),
+         "Download gemma-2-2b-q4_k_m.gguf from HuggingFace → models/"),
     ]
     all_ok = True
     for path, label, hint in required:
@@ -156,7 +167,10 @@ def main() -> None:
         sys.exit(1)
     print(f"  Retriever ready  ({time.perf_counter() - t0:.1f} s)")
 
-    # 3. Load LLM
+    # 3. Load LLM  (optionally override GPU layers from CLI)
+    if args.gpu_layers is not None:
+        config.N_GPU_LAYERS = args.gpu_layers
+        print(f"\nGPU layers overridden: {config.N_GPU_LAYERS}", flush=True)
     print("\nLoading language model (this may take 10-30 s)…", flush=True)
     t1 = time.perf_counter()
     try:

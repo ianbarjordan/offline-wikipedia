@@ -49,7 +49,7 @@ class LLM:
         if not model_path.exists():
             raise FileNotFoundError(
                 f"Model file not found: {model_path}\n"
-                "Download phi-3-mini-q4_k_m.gguf from HuggingFace and place it "
+                "Download gemma-2-2b-q4_k_m.gguf from HuggingFace and place it "
                 "in the models/ directory."
             )
 
