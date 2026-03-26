@@ -504,9 +504,9 @@ _Smoke test:_ 44/44 passed.
 | File | Status | Notes |
 |------|--------|-------|
 | `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3`, `MAX_LLM_CONTEXT_SOURCES=3`, `MAX_NEW_TOKENS=300` |
-| `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter; nickname expansion (`_NICKNAMES`); state abbreviation expansion (`_STATE_ABBREVS`) |
+| `app/retriever.py` | Done | Score-based rerank; SQL title supplement (cap ≤6) with whole-word post-filter; nickname expansion (`_NICKNAMES`); state abbreviation expansion (`_STATE_ABBREVS`, uppercase-only); expanded `_STOPWORDS` with preamble verbs |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
-| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; injection detection (`_INJECTION_RE`); meta-reply handler (`_META_RE`/`_META_REPLY`); expanded conversational handler; query augmentation (`_augment_query`); stronger grounding (fictional characters); context always injected into current turn |
+| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; injection detection (`_INJECTION_RE`); meta-reply handler (`_META_RE`/`_META_REPLY`); expanded conversational handler; `_is_conversational_reaction()` short-message catch-all; query augmentation (`_augment_query`, broadened to entity-less follow-ups, cap 12 words); stronger grounding (fictional characters); context always injected into current turn |
 | `app/gui.py` | Done | `chat_pairs_state` (gr.State) prevents browser serialization of history; source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse; `--gpu-layers N` flag for dev GPU testing |
 | `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads; `normalise_body_whitespace()` preserves paragraph breaks in body |
@@ -686,12 +686,61 @@ Data release `v1-data` on GitHub holds all large assets for re-download.
 
 ---
 
+## Query Formulation Overhaul — 8 Failure Modes Fixed (March 26 2026)
+
+A second live test revealed that the retriever's SQL title supplement was silently
+failing for natural-language phrasing, and that the augmentation path was too narrow.
+All changes in `app/pipeline.py` and `app/retriever.py`. Smoke test: **44/44 passed**.
+New edge-case suite: `scratch/smoke_edge_cases.py` — **22/22 passed**.
+
+**Fix A — Stopword expansion (`app/retriever.py`)**
+Expanded `_STOPWORDS` with ~25 preamble/filler words (`tell`, `want`, `know`,
+`explain`, `describe`, `show`, `give`, `find`, `need`, `like`, `make`, `use`,
+`say`, `let`, `please`, `can`, `could`, `would`, `get`, `look`, `also`, `have`,
+`has`, `had`, `do`, `did`, `does`, `be`, `been`, `more`, `some`, `just`, `really`,
+`very`, `think`, `see`).
+Effect: "Tell me about ASUS" → `q_ordered = ['asus']` → SQL exact-match finds Asus article.
+"I want to know about the most populated US states" → `q_ordered = ['most', 'populated', 'states']` → 3 tokens, SQL runs.
+
+**Fix B — SQL token cap raised to 6 (`app/retriever.py`)**
+Cap on SQL title supplement changed from `len(q_ordered) <= 4` to `<= 6`. After
+stopword expansion strips preamble words, most queries have fewer tokens. Moderately
+complex queries like "South Korean Army members count" (4 tokens after stripping)
+now still benefit from the SQL boost.
+
+**Fix C — Short-message reaction catch-all (`app/pipeline.py`)**
+Added `_is_conversational_reaction(message)`: returns True when ≤5 words, no
+capitalized content word after position 0 (not a named entity), no question word.
+Called after `_CONVERSATIONAL_RE.match()`. Catches reactions the regex missed due
+to its `\W*$` anchor:
+- "Okay, cool" → conversational ✓
+- "Only 77k?!" → conversational ✓
+- "Are you sure its not 700k?" → 6 words → falls through to augmentation ✓
+- "Tell me about ASUS" → has uppercase "ASUS" → real query ✓
+
+**Fix D — Broadened augmentation trigger (`app/pipeline.py`)**
+`_augment_query` now triggers on two conditions (OR'd):
+- (a) query contains a pronoun — existing logic
+- (b) query is ≤6 words AND has no proper noun after position 0 (entity-less follow-up)
+Word cap raised from 8 → 12 to cover longer pronoun-containing follow-ups.
+Effect: "How many members?" (after South Korean Army context) → augments → correct retrieval.
+"Are you sure its not 700k?" (after Alaska) → 6 words, no proper noun → augments with Alaska context.
+
+**Bug fix — State abbreviation expander corrupting natural language (`app/retriever.py`)**
+The expander was lowercasing all tokens before dict lookup, so common words like
+"me" (→ Maine), "in" (→ Indiana), "or" (→ Oregon), "de" (→ Delaware) were silently
+expanded. "Tell me about ASUS" became "Tell Maine about ASUS", and after Fix A's
+stopword stripping, `q_ordered = ['maine', 'asus']` → SQL searched "maine asus" → no match.
+Fix: only expand tokens where the **original** token is all-uppercase and exactly 2
+characters (e.g., `"ME"`, `"AK"`, `"CA"`). Lowercase common words are left unchanged.
+
+---
+
 ## Next Steps When Resuming
 
-1. **Live retest** after conversation quality fixes (injection, follow-ups, abbreviations, nicknames)
-2. **NSIS/Inno Setup installer**: wrap `dist\WikiOffline\` in a Setup.exe with Start
+1. **NSIS/Inno Setup installer**: wrap `dist\WikiOffline\` in a Setup.exe with Start
    Menu shortcut and Add/Remove Programs entry
-3. **Revisit GitHub Actions build** (Option B) if native build proves inconvenient
+2. **Revisit GitHub Actions build** (Option B) if native build proves inconvenient
 
 ## Environment Notes
 
