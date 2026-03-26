@@ -506,9 +506,9 @@ _Smoke test:_ 44/44 passed.
 | `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3`, `MAX_LLM_CONTEXT_SOURCES=3`, `MAX_NEW_TOKENS=300` |
 | `app/retriever.py` | Done | Score-based rerank; SQL title supplement with whole-word post-filter |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
-| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS` |
+| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; greeting handler; strengthened grounding; context always injected into current turn |
 | `app/gui.py` | Done | `chat_pairs_state` (gr.State) prevents browser serialization of history; source buttons open local `data/articles/{id}.html` via `_open_file()` |
-| `app/main.py` | Done | Startup sequence, pre-flight checks, argparse |
+| `app/main.py` | Done | Startup sequence, pre-flight checks, argparse; `--gpu-layers N` flag for dev GPU testing |
 | `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads; `normalise_body_whitespace()` preserves paragraph breaks in body |
 | `build/03_build_sqlite.py` | Done | `body_to_html()` renders body paragraphs as `<p>`/`<h2>` tags; CSS updated for formatted body |
 | `build/01,04` | Done | All other build scripts written and smoke-tested |
@@ -588,12 +588,67 @@ Replaced Phi-3 Mini with Gemma 2 2B IT (Q4_K_M):
   - History turns: `<start_of_turn>user\n...<end_of_turn>\n<start_of_turn>model\n...<end_of_turn>\n`
 - `wiki-offline.spec` — model filename and HF source URL updated
 
+## Live Testing Fixes — Grounding + UX (March 26 2026)
+
+Three issues observed in a live 12-turn test conversation:
+
+**Issue 1 — Greeting leakage**: "Hello. What can you do?" triggered FAISS retrieval,
+which returned an article called "Hello I Must Be Going". The model obediently described
+the retrieved articles instead of explaining its capabilities.
+
+_Fix_: Added `_CONVERSATIONAL_RE` regex in `pipeline.py`. Greetings and meta-questions
+(hello, hi, what can you do, who are you, etc.) are detected before retrieval and return
+a canned `_GREETING_REPLY` immediately — no FAISS call, no LLM call.
+
+**Issue 2 — Training data leakage**: Gemma 2 ignored grounding instructions for
+well-known facts (Trump, Samsung, Slovenia, etc.), answering entirely from parametric
+memory while displaying unrelated Wikipedia sources.
+
+_Fix_: `_GROUNDING_HIGH` and `_GROUNDING_LOW` rewritten to be explicit:
+- "Do NOT use your training knowledge — not even for famous people, current events,
+  or well-known facts."
+- Mandates exact fallback phrase: "My Wikipedia database doesn't cover that topic."
+- System template `_SYSTEM_TEMPLATE` updated to repeat the rule at the top and in
+  the format instructions.
+
+**Issue 3 — System prompt position in multi-turn**: With chat history, the system
+prompt (with fresh Wikipedia context) was injected into the *oldest* historical turn.
+By turn 3+, the model treated it as stale background, weakening grounding.
+
+_Fix_: `_build_prompt()` restructured — historical turns are now plain user/model
+exchanges with no system text. The system prompt + fresh context is always injected
+into the **current** user turn, immediately adjacent to generation. Same token budget,
+stronger signal.
+
+**Also added**: `--gpu-layers N` flag to `main.py` for dev testing on GPU without
+changing `config.py`. `dist/WikiOffline.exe` always defaults to CPU (`N_GPU_LAYERS=0`).
+
+---
+
+## Windows Build — Option A (Native)
+
+PyInstaller runs on the Windows host (not WSL). Steps after `git pull`:
+```
+mkdir models
+curl -L -o models\gemma-2-2b-q4_k_m.gguf https://github.com/ianbarjordan/offline-wikipedia/releases/download/v1-data/gemma-2-2b-q4_k_m.gguf
+python -m PyInstaller wiki-offline.spec
+```
+Data files (`wikipedia.db`, `wikipedia.faiss`, `id_map.json`, `articles/`) must already
+be present. Embedding model must be pre-cached via sentence-transformers download.
+
+GitHub Actions Option B workflow exists (`.github/workflows/build-windows.yml`) but
+was paused due to YAML/extraction issues — to be revisited later.
+
+Data release `v1-data` on GitHub holds all large assets for re-download.
+
+---
+
 ## Next Steps When Resuming
 
-1. **Windows installer build**:
-   - Complete the 4-step pre-build checklist in `wiki-offline.spec`
-   - `pip install pyinstaller && pyinstaller wiki-offline.spec`
-   - Ship `dist/WikiOffline/` to end users
+1. **Retest live conversation** after grounding fixes (`git pull` on Windows, rerun)
+2. **NSIS/Inno Setup installer**: wrap `dist\WikiOffline\` in a Setup.exe with Start
+   Menu shortcut and Add/Remove Programs entry
+3. **Revisit GitHub Actions build** (Option B) if native build proves inconvenient
 
 ## Environment Notes
 
