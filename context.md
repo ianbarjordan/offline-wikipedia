@@ -736,6 +736,34 @@ characters (e.g., `"ME"`, `"AK"`, `"CA"`). Lowercase common words are left uncha
 
 ---
 
+## Round 3 Fixes — Live Transcript Issues (`app/pipeline.py`, `app/config.py`)
+
+**Fix 1 — Injection regex repaired (`_INJECTION_RE`)**
+- Previous regex allowed only ONE optional modifier word before the target noun.
+- `"Ignore all previous instructions"` (two modifiers: `all` + `previous`) slipped through.
+- Fix: replaced `(your\s+)?(previous|...)?` with `(?:(?:your|previous|...)\s+)*` (zero-or-more).
+- Now catches any chain of modifier words.
+
+**Fix 2 — Yes/no question guard in `_is_conversational_reaction`**
+- Added `_YES_NO_STARTERS` frozenset (`is`, `are`, `was`, `were`, `do`, etc.).
+- When a message starts with a yes/no verb, check the subject: if it is NOT `"you"`, the
+  message is a real query (e.g. `"Are red pandas pandas?"`, `"Was he a real person?"`).
+- `"Are you sure?"` still correctly returns `True` (subject is `"you"`).
+
+**Fix 3 — Token cap raised + truncation detection**
+- `MAX_NEW_TOKENS` raised from 300 → 400 (`config.py`).
+- Added `_truncation_guard(gen)` wrapper in `pipeline.py`: buffers all tokens; if the full
+  response doesn't end with `.`, `!`, `?`, `"`, or `'`, appends `" [...]"`.
+- Applied to every LLM call in `query()`.
+
+**Fix 4 — Augmentation from assistant response, not user query**
+- `_augment_query` now extracts keywords from the **previous assistant response** (first
+  sentence only) so the actual entity named in the answer (e.g. `"bluebonnet"`) is included.
+- Falls back to user query keywords if the assistant gave a canned/empty reply.
+- `_CANNED_REPLIES` frozenset added to detect canned replies reliably.
+
+---
+
 ## Next Steps When Resuming
 
 1. **NSIS/Inno Setup installer**: wrap `dist\WikiOffline\` in a Setup.exe with Start

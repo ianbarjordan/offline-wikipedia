@@ -62,5 +62,5 @@ ARTICLES_DIR: Path = PROJECT_ROOT / "data" / "articles"
 MAX_DISPLAY_SOURCES: int = 3   # Max source buttons shown per response
 MAX_LLM_CONTEXT_SOURCES: int = 3  # Articles included in the LLM prompt
                                    # (retrieval pool stays TOP_K for rerank quality)
-MAX_NEW_TOKENS: int = 300  # Max tokens the LLM may generate per response
-                           # ~220 words — enough for a thorough paragraph
+MAX_NEW_TOKENS: int = 400  # Max tokens the LLM may generate per response
+                           # ~300 words — enough for longer biographical paragraphs

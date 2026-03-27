@@ -95,7 +95,7 @@ _INJECTION_REPLY = (
 # Fix 1 — Prompt injection detection. Checked before all other handlers.
 _INJECTION_RE = re.compile(
     r"(ignore|disregard|forget|override|bypass|cancel|reset)\s+"
-    r"(your\s+)?(previous|prior|above|all|the|my|any)?\s*"
+    r"(?:(?:your|previous|prior|above|all|the|my|any)\s+)*"
     r"(instruction|prompt|rule|constraint|guideline|system|context|order)s?"
     r"|you\s+are\s+now\s+|act\s+as\s+|pretend\s+(to\s+be\s+|you\s+are\s+)"
     r"|roleplay\s+as|jailbreak|DAN\b",
@@ -147,6 +147,12 @@ _QUESTION_WORDS = frozenset({
     "what", "where", "who", "when", "how", "why", "which",
 })
 
+# Fix 2 — Yes/no question starters that need a subject guard.
+_YES_NO_STARTERS = frozenset({
+    "is", "are", "was", "were", "do", "does", "did",
+    "has", "have", "had", "can", "could", "will", "would", "should",
+})
+
 
 def _is_conversational_reaction(message: str) -> bool:
     """
@@ -156,6 +162,14 @@ def _is_conversational_reaction(message: str) -> bool:
     words = message.strip().rstrip("?!.,").split()
     if len(words) > 5:
         return False
+    # Yes/no questions where the subject is not "you" are real queries, not reactions.
+    # "Are you sure?" → subject is "you" → conversational ✓
+    # "Are red pandas pandas?" → subject is "red" → real query ✓
+    # "Was he a real person?" → subject is "he" → real query ✓
+    if words and words[0].lower() in _YES_NO_STARTERS:
+        subject = words[1].lower() if len(words) > 1 else ""
+        if subject != "you":
+            return False
     # A question word signals a real query.
     if any(w.lower() in _QUESTION_WORDS for w in words):
         return False
@@ -166,12 +180,20 @@ def _is_conversational_reaction(message: str) -> bool:
     return True
 
 
+_CANNED_REPLIES = frozenset({_GREETING_REPLY, _META_REPLY, _INJECTION_REPLY, _LOW_CONFIDENCE_REPLY})
+
+
 def _augment_query(user_message: str, chat_history: list[tuple[str, str]]) -> str:
     """
-    Augment the retrieval query with context from the previous user turn when:
+    Augment the retrieval query with context from the previous turn when:
       (a) the query contains a pronoun (existing logic), OR
       (b) the query is short (≤6 words) and has no proper noun — entity-less follow-up.
     Word cap raised from 8 → 12 to cover longer pronoun-containing follow-ups. (Fix D)
+
+    Fix 4: keywords are now extracted from the previous *assistant* response
+    (first sentence only) so that the actual entity named in the answer
+    (e.g. "bluebonnet") is included.  Falls back to the previous user query
+    if the assistant gave a canned/empty reply.
     """
     words = user_message.split()
     has_pronoun = bool(_PRONOUN_RE.search(user_message))
@@ -185,14 +207,47 @@ def _augment_query(user_message: str, chat_history: list[tuple[str, str]]) -> st
         return user_message
     if not chat_history:
         return user_message
-    prev_user = chat_history[-1][0]
-    key_words = [
-        w.strip(".,?!") for w in prev_user.split()
-        if w.lower().strip(".,?!") not in _AUGMENT_STOPWORDS and len(w) > 2
-    ][:4]
+
+    prev_user, prev_assistant = chat_history[-1]
+
+    # Prefer keywords from the assistant's previous response (first sentence only)
+    # as it names the actual retrieved entity (e.g. "bluebonnet", "John the Baptist").
+    # Fall back to the user's query if the assistant gave a canned/empty reply.
+    key_words: list[str] = []
+    if prev_assistant and prev_assistant not in _CANNED_REPLIES:
+        first_sentence = re.split(r'(?<=[.!?])\s', prev_assistant)[0]
+        key_words = [
+            w.strip(".,?!()\"'") for w in first_sentence.split()
+            if w.lower().strip(".,?!()\"'") not in _AUGMENT_STOPWORDS
+            and len(w.strip(".,?!()\"'")) > 2
+        ][:4]
+
+    if not key_words:
+        key_words = [
+            w.strip(".,?!") for w in prev_user.split()
+            if w.lower().strip(".,?!") not in _AUGMENT_STOPWORDS and len(w) > 2
+        ][:4]
+
     if not key_words:
         return user_message
     return " ".join(key_words) + " " + user_message
+
+
+_SENTENCE_END_RE = re.compile(r'[.!?"\u2019\u201d]\s*$')
+
+
+def _truncation_guard(gen) -> Generator[str, None, None]:
+    """
+    Wrap a token generator. If the full response doesn't end with sentence-ending
+    punctuation, yield " [...]" to signal the response was cut off.
+    """
+    buf: list[str] = []
+    for token in gen:
+        buf.append(token)
+        yield token
+    full = "".join(buf)
+    if full.strip() and not _SENTENCE_END_RE.search(full):
+        yield " [...]"
 
 
 def _const_generator(text: str) -> Generator[str, None, None]:
@@ -269,7 +324,9 @@ class Pipeline:
         context = _build_context(articles[:config.MAX_LLM_CONTEXT_SOURCES])
         # Always pass original user_message (not augmented) to the LLM.
         prompt = _build_prompt(user_message, chat_history, context, low_confidence=low_confidence)
-        stream = self._llm.generate(prompt, stream=True, max_tokens=config.MAX_NEW_TOKENS)
+        stream = _truncation_guard(
+            self._llm.generate(prompt, stream=True, max_tokens=config.MAX_NEW_TOKENS)
+        )
 
         display = articles[:config.MAX_DISPLAY_SOURCES]
 
