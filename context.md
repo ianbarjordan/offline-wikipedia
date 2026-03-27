@@ -142,7 +142,7 @@ All tuneable constants live in `app/config.py`:
 - `TOP_K`, `NPROBE`, `CONFIDENCE_THRESHOLD`, `TITLE_BOOST` — retrieval
 - `MAX_DISPLAY_SOURCES = 3` — max source buttons shown in GUI per response
 - `MAX_LLM_CONTEXT_SOURCES = 3` — articles sliced into the LLM prompt (retrieval pool stays TOP_K)
-- `MAX_NEW_TOKENS = 300` — max tokens the LLM may generate per response (~220 words)
+- `MAX_NEW_TOKENS = 400` — max tokens the LLM may generate per response (~300 words)
 - `N_THREADS`, `N_GPU_LAYERS`, `CTX_WINDOW` — LLM performance
 - `EMBED_MODEL`, `EMBEDDING_DIM`, `CHAT_HISTORY_TURNS`
 - `MODEL_PATH`, `DB_PATH`, `FAISS_PATH`, `ID_MAP_PATH`, `ARTICLES_DIR`
@@ -503,10 +503,10 @@ _Smoke test:_ 44/44 passed.
 
 | File | Status | Notes |
 |------|--------|-------|
-| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3`, `MAX_LLM_CONTEXT_SOURCES=3`, `MAX_NEW_TOKENS=300` |
+| `app/config.py` | Done | `CONFIDENCE_THRESHOLD=0.15`, `TITLE_BOOST=2.0`, `TOP_K=8`, `MAX_DISPLAY_SOURCES=3`, `MAX_LLM_CONTEXT_SOURCES=3`, `MAX_NEW_TOKENS=400` |
 | `app/retriever.py` | Done | Score-based rerank; SQL title supplement (cap ≤6) with whole-word post-filter; nickname expansion (`_NICKNAMES`); state abbreviation expansion (`_STATE_ABBREVS`, uppercase-only); expanded `_STOPWORDS` with preamble verbs |
 | `app/llm.py` | Done | Defensive `.get()` stream access; `llama-cpp-python 0.3.16` |
-| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; injection detection (`_INJECTION_RE`); meta-reply handler (`_META_RE`/`_META_REPLY`); expanded conversational handler; `_is_conversational_reaction()` short-message catch-all; query augmentation (`_augment_query`, broadened to entity-less follow-ups, cap 12 words); stronger grounding (fictional characters); context always injected into current turn |
+| `app/pipeline.py` | Done | Three-way confidence gate; `_SYSTEM_TEMPLATE`; display source cap; LLM context sliced to `MAX_LLM_CONTEXT_SOURCES`; generation capped at `MAX_NEW_TOKENS`; injection detection (`_INJECTION_RE`, zero-or-more modifier groups); meta-reply handler (`_META_RE`/`_META_REPLY`); expanded conversational handler; `_is_conversational_reaction()` with `_YES_NO_STARTERS` guard; `_truncation_guard()` appends `" [...]"` on mid-sentence cutoff; query augmentation (`_augment_query`, extracts keywords from assistant response first, falls back to user query, broadened to entity-less follow-ups, cap 12 words); `_CANNED_REPLIES` frozenset; stronger grounding (fictional characters); context always injected into current turn |
 | `app/gui.py` | Done | `chat_pairs_state` (gr.State) prevents browser serialization of history; source buttons open local `data/articles/{id}.html` via `_open_file()` |
 | `app/main.py` | Done | Startup sequence, pre-flight checks, argparse; `--gpu-layers N` flag for dev GPU testing |
 | `build/02_parse_articles.py` | Done | `clean_lead()` strips maintenance-banner sentences from leads; `normalise_body_whitespace()` preserves paragraph breaks in body |
@@ -542,6 +542,20 @@ The smoke test writes to `scratch/smoke_data/` (isolated from production):
 - `scratch/smoke_data/articles/`
 
 **Smoke test result (March 22 2026): 44/44 checks passed — ALL PASSED (9.3s)**
+
+---
+
+## Smoke Test Inventory
+
+| File | Checks | Focus |
+|------|--------|-------|
+| `scratch/smoke_test_e2e.py` | 44 | Full build pipeline + Gradio UI integration |
+| `scratch/smoke_edge_cases.py` | 43 | Pure-logic unit tests for individual pipeline functions |
+| `scratch/smoke_pipeline.py` | 38 | Pipeline routing, confidence gate, truncation guard (e2e), query augmentation, multi-turn respond() accumulation, conversation flows |
+
+`scratch/smoke_pipeline.py` uses `MockRetriever` + `MockLLM` only — no data files, FAISS index, or model required. Run time &lt;5 seconds.
+
+**Result (March 27 2026): 38/38 checks passed — ALL PASSED**
 
 **HTML article formatting fix (March 22 2026):**
 - `build/02_parse_articles.py`: Added `normalise_body_whitespace()` — preserves `\n\n` paragraph breaks in body (leads still fully collapsed via `normalise_whitespace()`).
@@ -691,7 +705,7 @@ Data release `v1-data` on GitHub holds all large assets for re-download.
 A second live test revealed that the retriever's SQL title supplement was silently
 failing for natural-language phrasing, and that the augmentation path was too narrow.
 All changes in `app/pipeline.py` and `app/retriever.py`. Smoke test: **44/44 passed**.
-New edge-case suite: `scratch/smoke_edge_cases.py` — **22/22 passed**.
+New edge-case suite: `scratch/smoke_edge_cases.py` — **22/22 passed** (Round 3 extended to **43/43**).
 
 **Fix A — Stopword expansion (`app/retriever.py`)**
 Expanded `_STOPWORDS` with ~25 preamble/filler words (`tell`, `want`, `know`,
