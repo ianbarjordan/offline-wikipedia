@@ -108,16 +108,16 @@ def _gen(tokens):
 # Response ending without sentence-ending punctuation → guard appends " [...]"
 tokens_cut = list(_truncation_guard(_gen(["George Bush ran for president", " but lost"])))
 full_cut = "".join(tokens_cut)
-check("truncated response gets ' [...]' appended", full_cut.endswith(" [...]"), True)
+check("truncated response gets ' *(incomplete)*' appended", full_cut.endswith(" *(incomplete)*"), True)
 
 # Response ending with "." → guard is silent
 tokens_ok = list(_truncation_guard(_gen(["He was born in 1946."])))
 full_ok = "".join(tokens_ok)
-check("complete response (ends with '.') — no ' [...]'", " [...]" not in full_ok, True)
+check("complete response (ends with '.') — no incomplete marker", "*(incomplete)*" not in full_ok, True)
 
 # Response ending with "?" → guard is silent
 tokens_q = list(_truncation_guard(_gen(["Is it true?"])))
-check("complete response (ends with '?') — no ' [...]'", " [...]" not in "".join(tokens_q), True)
+check("complete response (ends with '?') — no incomplete marker", "*(incomplete)*" not in "".join(tokens_q), True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

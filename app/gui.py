@@ -80,9 +80,18 @@ _TOP_K = config.TOP_K   # number of source buttons (always rendered, show/hide)
 
 CSS = """
 #sources-label { font-weight: 600; margin-bottom: 4px; }
-.source-btn { text-align: left !important; }
+.source-btn {
+    text-align: left !important;
+    white-space: pre-line !important;
+    height: auto !important;
+    min-height: 40px !important;
+    line-height: 1.35 !important;
+}
 footer { display: none !important; }
 """
+
+# Placeholder shown in the assistant bubble while retrieval + first token is pending.
+_THINKING_PLACEHOLDER = "▌"
 
 
 # ---------------------------------------------------------------------------
@@ -114,37 +123,69 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
 
         Yields
         ------
-        Tuple of (cleared_input, updated_history, chat_pairs_state,
-                  articles_state, src_row_update, btn0_update, …, btn{TOP_K-1}_update)
+        Tuple of (msg_update, updated_history, chat_pairs_state,
+                  articles_state, src_row_update, btn0…btn{TOP_K-1},
+                  ask_btn_update, clear_pending_state, clear_btn_update)
         """
         message = message.strip()
         if not message:
             yield from _noop(history, chat_pairs)
             return
 
-        # 1. Append user message + empty assistant placeholder immediately.
+        # 1. Append user message + thinking placeholder; disable inputs immediately.
         history = history + [
             gr.ChatMessage(role="user", content=message),
-            gr.ChatMessage(role="assistant", content=""),
+            gr.ChatMessage(role="assistant", content=_THINKING_PLACEHOLDER),
         ]
-        yield ("", history, chat_pairs, [], gr.update(visible=False),
-               *[gr.update(visible=False)] * _TOP_K)
+        yield (
+            gr.update(value="", interactive=False),
+            history, chat_pairs, [],
+            gr.update(visible=False),
+            *[gr.update(visible=False)] * _TOP_K,
+            gr.update(interactive=False),  # ask_btn
+            gr.update(),                   # clear_pending_state — no change
+            gr.update(),                   # clear_btn — no change
+        )
 
         # 2. Retrieve + stream.
         stream, articles = pipeline.query(message, chat_pairs)
 
         response_text = ""
+        first_token = True
         for token in stream:
-            history[-1].content += token
+            if first_token:
+                history[-1].content = token   # replace ▌ with first real token
+                first_token = False
+            else:
+                history[-1].content += token
             response_text += token
-            yield ("", history, chat_pairs, articles, gr.update(visible=False),
-                   *[gr.update(visible=False)] * _TOP_K)
+            yield (
+                gr.update(),
+                history, chat_pairs, articles,
+                gr.update(visible=False),
+                *[gr.update(visible=False)] * _TOP_K,
+                gr.update(),  # ask_btn — no change
+                gr.update(),  # clear_pending_state — no change
+                gr.update(),  # clear_btn — no change
+            )
 
-        # 3. Streaming done — update chat pairs + reveal sources.
+        # 3. Handle empty response (LLM produced nothing).
+        if not response_text.strip():
+            response_text = "_No response generated. Please try rephrasing._"
+            history[-1].content = response_text
+
+        # 4. Streaming done — update chat pairs, reveal sources, re-enable inputs.
         new_chat_pairs = chat_pairs + [(message, response_text)]
         src_updates = _build_source_updates(articles)
         show_row = gr.update(visible=bool(articles))
-        yield ("", history, new_chat_pairs, articles, show_row, *src_updates)
+        yield (
+            gr.update(value="", interactive=True),
+            history, new_chat_pairs, articles,
+            show_row, *src_updates,
+            gr.update(interactive=True),                                    # ask_btn
+            False,                                                          # clear_pending → reset
+            gr.update(value="Clear conversation", variant="secondary"),     # clear_btn → reset
+        )
 
     def open_article(articles: list, btn_idx: int) -> None:
         """Open the local HTML file for source button *btn_idx*."""
@@ -152,11 +193,38 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
             art = articles[btn_idx]
             _open_file(config.ARTICLES_DIR / f"{art['id']}.html")
 
-    def clear_conversation() -> tuple:
-        """Reset chat and hide sources."""
-        hidden = [gr.update(visible=False)] * _TOP_K
-        return [], [], [], gr.update(visible=False), *hidden
-        #       ^chatbot ^chat_pairs ^articles  ^src_row
+    def clear_conversation(
+        pending: bool,
+        history: list,
+        chat_pairs: list,
+        articles: list,
+    ) -> tuple:
+        """
+        Two-step clear: first click shows a warning; second click clears.
+
+        Returns
+        -------
+        (clear_pending, clear_btn_update, chatbot, chat_pairs_state,
+         articles_state, src_row_update, btn0…btn{TOP_K-1})
+        """
+        if not pending:
+            # First click — show warning, keep everything as-is.
+            return (
+                True,
+                gr.update(value="⚠ Click again to confirm", variant="stop"),
+                history, chat_pairs, articles,
+                gr.update(),
+                *[gr.update() for _ in range(_TOP_K)],
+            )
+        # Second click — actually clear.
+        hidden = [gr.update(visible=False, value="—")] * _TOP_K
+        return (
+            False,
+            gr.update(value="Clear conversation", variant="secondary"),
+            [], [], [],
+            gr.update(visible=False),
+            *hidden,
+        )
 
     # -- Layout --------------------------------------------------------------
 
@@ -207,19 +275,28 @@ def create_ui(pipeline: "Pipeline") -> gr.Blocks:
         chat_pairs_state = gr.State([])
         # State: list[dict] of retrieved articles for the current response.
         articles_state = gr.State([])
+        # State: tracks whether the user has clicked "Clear" once (pending confirmation).
+        clear_pending_state = gr.State(False)
 
         # -- Wire up events --------------------------------------------------
 
         respond_inputs  = [msg, chatbot, chat_pairs_state]
-        respond_outputs = [msg, chatbot, chat_pairs_state, articles_state, src_row, *src_buttons]
+        respond_outputs = [
+            msg, chatbot, chat_pairs_state, articles_state, src_row, *src_buttons,
+            ask_btn, clear_pending_state, clear_btn,
+        ]
 
         msg.submit(respond, respond_inputs, respond_outputs)
         ask_btn.click(respond, respond_inputs, respond_outputs)
 
         clear_btn.click(
             clear_conversation,
-            inputs=[],
-            outputs=[chatbot, chat_pairs_state, articles_state, src_row, *src_buttons],
+            inputs=[clear_pending_state, chatbot, chat_pairs_state, articles_state],
+            outputs=[
+                clear_pending_state, clear_btn,
+                chatbot, chat_pairs_state, articles_state,
+                src_row, *src_buttons,
+            ],
         )
 
         # Source button click → open HTML article.
@@ -262,12 +339,19 @@ def _to_pairs(history: list) -> list[tuple[str, str]]:
 def _build_source_updates(articles: list[dict]) -> list:
     """
     Build a list of gr.update() calls for the TOP_K source buttons.
-    Visible buttons get the article title as their label; extras are hidden.
+    Visible buttons show title + a truncated lead snippet; extras are hidden.
     """
     updates = []
     for i in range(_TOP_K):
         if i < len(articles):
-            updates.append(gr.update(visible=True, value=articles[i]["title"]))
+            title = articles[i]["title"]
+            lead  = articles[i].get("lead", "")
+            if lead:
+                snippet = lead[:80] + ("…" if len(lead) > 80 else "")
+                label = f"{title}\n{snippet}"
+            else:
+                label = title
+            updates.append(gr.update(visible=True, value=label))
         else:
             updates.append(gr.update(visible=False, value="—"))
     return updates
@@ -275,8 +359,15 @@ def _build_source_updates(articles: list[dict]) -> list:
 
 def _noop(history: list, chat_pairs: list) -> Generator:
     """Yield a single no-op update (empty message — do nothing)."""
-    yield ("", history, chat_pairs, [], gr.update(visible=False),
-           *[gr.update(visible=False)] * _TOP_K)
+    yield (
+        gr.update(),
+        history, chat_pairs, [],
+        gr.update(visible=False),
+        *[gr.update(visible=False)] * _TOP_K,
+        gr.update(),  # ask_btn
+        gr.update(),  # clear_pending_state
+        gr.update(),  # clear_btn
+    )
 
 
 def _open_file(path: Path) -> None:

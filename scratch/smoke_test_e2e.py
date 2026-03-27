@@ -410,7 +410,11 @@ def stage_8_respond_generator(demo) -> None:
 
     cleared_input  = first_yield[0]
     first_history  = first_yield[1]
-    check("input cleared to ''", cleared_input == "", repr(cleared_input))
+    # cleared_input may be a plain "" or a gr.update dict with value=""
+    cleared_val = (
+        cleared_input.get("value") if isinstance(cleared_input, dict) else cleared_input
+    )
+    check("input cleared to ''", cleared_val == "", repr(cleared_input))
     check("history has 2 messages after first yield", len(first_history) == 2,
           f"len={len(first_history)}")
     check("first message is user role",
@@ -453,11 +457,13 @@ def stage_9_clear(demo) -> None:
     if clear_fn is None:
         return
 
-    result = clear_fn()
+    # Call with pending=True to exercise the actual-clear path directly.
+    # Outputs: (clear_pending, clear_btn, chatbot, chat_pairs, articles, src_row, *src_buttons)
+    result = clear_fn(True, [], [], [])
     check("returns a tuple", isinstance(result, tuple))
-    cleared_history  = result[0]   # unchanged
-    cleared_articles = result[2]   # was [1] — shifted by chat_pairs at index 1
-    row_update       = result[3]   # was [2] — shifted by chat_pairs at index 1
+    cleared_history  = result[2]   # chatbot at index 2
+    cleared_articles = result[4]   # articles_state at index 4
+    row_update       = result[5]   # src_row at index 5
     check("history reset to []", cleared_history == [], str(cleared_history))
     check("articles reset to []", cleared_articles == [], str(cleared_articles))
     row_hidden = row_update.get("visible") if isinstance(row_update, dict) else getattr(row_update, "visible", None)

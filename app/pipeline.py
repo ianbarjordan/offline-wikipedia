@@ -153,6 +153,12 @@ _YES_NO_STARTERS = frozenset({
     "has", "have", "had", "can", "could", "will", "would", "should",
 })
 
+# Verbs that signal an explicit information request — never treat as a reaction.
+_REQUEST_VERBS = frozenset({
+    "tell", "explain", "describe", "show", "list", "give",
+    "find", "define",
+})
+
 
 def _is_conversational_reaction(message: str) -> bool:
     """
@@ -161,6 +167,9 @@ def _is_conversational_reaction(message: str) -> bool:
     """
     words = message.strip().rstrip("?!.,").split()
     if len(words) > 5:
+        return False
+    # A message starting with a request verb is always a real query, not a reaction.
+    if words and words[0].lower() in _REQUEST_VERBS:
         return False
     # Yes/no questions where the subject is not "you" are real queries, not reactions.
     # "Are you sure?" → subject is "you" → conversational ✓
@@ -247,7 +256,7 @@ def _truncation_guard(gen) -> Generator[str, None, None]:
         yield token
     full = "".join(buf)
     if full.strip() and not _SENTENCE_END_RE.search(full):
-        yield " [...]"
+        yield " *(incomplete)*"
 
 
 def _const_generator(text: str) -> Generator[str, None, None]:
@@ -332,7 +341,7 @@ class Pipeline:
 
         if low_confidence:
             return _prepend_generator(
-                "I didn't find a strong Wikipedia match for your question, so this answer may be incomplete.\n\n",
+                "_No strong Wikipedia match found — this answer may be incomplete._\n\n",
                 stream,
             ), display
 

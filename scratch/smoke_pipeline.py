@@ -185,7 +185,7 @@ pipeline_low = Pipeline(MockRetriever(articles=[LOW_SCORE_ART]), MockLLM())
 stream, arts = pipeline_low.query("What are fish?", [])
 full_b = "".join(stream)
 check("low score: disclaimer prepended",
-      full_b.startswith("I didn't find a strong Wikipedia match"),
+      full_b.startswith("_No strong Wikipedia match found"),
       repr(full_b[:60]))
 check("low score: articles still returned", arts == [LOW_SCORE_ART])
 
@@ -208,15 +208,15 @@ section("Section 3 — Truncation Guard Integration")
 pipeline_ok = Pipeline(MockRetriever(articles=[HIGH_SCORE_ART]), MockLLM(truncated=False))
 tokens_ok = list(pipeline_ok.query("What is light?", [])[0])
 full_ok = "".join(tokens_ok)
-check("complete response: no [...]",         "[...]" not in full_ok, repr(full_ok[-20:]))
+check("complete response: no *(incomplete)*", "*(incomplete)*" not in full_ok, repr(full_ok[-20:]))
 check("complete response ends with '.'",     full_ok.strip().endswith("."),  repr(full_ok[-5:]))
 
 # Truncated sentence → _truncation_guard should append [...]
 pipeline_cut = Pipeline(MockRetriever(articles=[HIGH_SCORE_ART]), MockLLM(truncated=True))
 tokens_cut = list(pipeline_cut.query("Who is George Bush?", [])[0])
 full_cut = "".join(tokens_cut)
-check("truncated response: [...] appended",  "[...]" in full_cut,            repr(full_cut[-30:]))
-check("[...] is the final content",          full_cut.rstrip().endswith("[...]"), repr(full_cut[-20:]))
+check("truncated response: *(incomplete)* appended",  "*(incomplete)*" in full_cut,            repr(full_cut[-30:]))
+check("*(incomplete)* is the final content",          full_cut.rstrip().endswith("*(incomplete)*"), repr(full_cut[-30:]))
 
 # ---------------------------------------------------------------------------
 # Section 4 — Query Augmentation in Pipeline Context
