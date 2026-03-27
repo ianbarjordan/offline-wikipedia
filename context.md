@@ -513,6 +513,7 @@ _Smoke test:_ 44/44 passed.
 | `build/03_build_sqlite.py` | Done | `body_to_html()` renders body paragraphs as `<p>`/`<h2>` tags; CSS updated for formatted body |
 | `build/01,04` | Done | All other build scripts written and smoke-tested |
 | `wiki-offline.spec` | Done | PyInstaller onedir spec |
+| `installer.iss` | Done | Inno Setup 6 script; wraps dist\WikiOffline\ into Setup.exe |
 
 ---
 
@@ -780,8 +781,9 @@ characters (e.g., `"ME"`, `"AK"`, `"CA"`). Lowercase common words are left uncha
 
 ## Next Steps When Resuming
 
-1. **NSIS/Inno Setup installer**: wrap `dist\WikiOffline\` in a Setup.exe with Start
-   Menu shortcut and Add/Remove Programs entry
+1. **Build installer on Windows**: run `iscc installer.iss` (or Inno Setup GUI → F9)
+   after completing the PyInstaller build (`python -m PyInstaller wiki-offline.spec`).
+   Output: `installer\WikiOffline-Setup.exe`.
 2. **Revisit GitHub Actions build** (Option B) if native build proves inconvenient
 
 ## Environment Notes
